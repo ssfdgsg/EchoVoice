@@ -1,0 +1,22 @@
+{
+  "svelte.enable-ts-plugin": true,
+  "cSpell.words": [
+    "audiorenderclient",
+    "bitdepth",
+    "blockalign",
+    "Cpath",
+    "Csvg",
+    "echovoice",
+    "friendlyname",
+    "Fsvg",
+    "Fwww",
+    "iaudioclient",
+    "mixformat",
+    "resampler",
+    "ringbuf",
+    "rustup",
+    "Tauri",
+    "wasapi",
+    "waveformatex"
+  ]
+}
