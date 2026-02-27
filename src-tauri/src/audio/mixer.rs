@@ -30,11 +30,43 @@ impl Mixer {
 
     pub fn play_sound(&self, data: Arc<Vec<f32>>, volume: f32) {
         if let Ok(mut fx_list) = self.active_fx.lock() {
+            // Single-playback: stop any previous sound before playing a new one
+            fx_list.clear();
             fx_list.push(FxInstance {
                 sound_data: data,
                 position: 0,
                 volume,
             });
+        }
+    }
+
+    pub fn stop_sound(&self) {
+        self.clear();
+    }
+
+    pub fn is_playing(&self) -> bool {
+        if let Ok(fx_list) = self.active_fx.lock() {
+            !fx_list.is_empty()
+        } else {
+            false
+        }
+    }
+
+    pub fn get_playback_state(&self) -> Option<(usize, usize)> {
+        if let Ok(fx_list) = self.active_fx.lock() {
+            if let Some(fx) = fx_list.first() {
+                return Some((fx.position, fx.sound_data.len()));
+            }
+        }
+        None
+    }
+
+    pub fn seek(&self, position_ratio: f32) {
+        if let Ok(mut fx_list) = self.active_fx.lock() {
+            if let Some(fx) = fx_list.first_mut() {
+                let target_pos = (fx.sound_data.len() as f32 * position_ratio) as usize;
+                fx.position = target_pos.min(fx.sound_data.len().saturating_sub(1));
+            }
         }
     }
 

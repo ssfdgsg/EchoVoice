@@ -2,9 +2,10 @@ use crate::audio::mixer::Mixer;
 use ringbuf::traits::Observer;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::HeapRb;
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::thread;
 use tracing::{error, info};
@@ -24,6 +25,7 @@ pub struct AudioEngine {
     is_running: Arc<AtomicBool>,
     mixer: Arc<Mixer>,
     sample_rate: Arc<AtomicU32>,
+    sound_cache: Arc<Mutex<HashMap<String, Arc<Vec<f32>>>>>,
 }
 
 impl Default for AudioEngine {
@@ -38,6 +40,7 @@ impl AudioEngine {
             is_running: Arc::new(AtomicBool::new(false)),
             mixer: Arc::new(Mixer::new()),
             sample_rate: Arc::new(AtomicU32::new(48000)),
+            sound_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -91,15 +94,55 @@ impl AudioEngine {
         }
 
         let sr = self.sample_rate.load(Ordering::Relaxed);
-        let bank = crate::audio::fx::SoundBank::load_from_file(file_path, sr)?;
-        info!(
-            "Loaded sound: {} ({} samples, {} sr)",
-            file_path,
-            bank.data.len(),
-            sr
-        );
-        self.mixer.play_sound(Arc::new(bank.data), 1.0);
+        let mixer = self.mixer.clone();
+        let path = file_path.to_string();
+        let cache = self.sound_cache.clone();
+
+        // 1. Check if it's already cached
+        let cached_data = {
+            let cache_lock = cache.lock().unwrap();
+            cache_lock.get(&path).cloned()
+        };
+
+        if let Some(data) = cached_data {
+            // If it's already decoded, play it instantly
+            mixer.play_sound(data, 1.0);
+        } else {
+            // 2. Not cached: decode it now (synchronously blocking this IPC call)
+            match crate::audio::fx::SoundBank::load_from_file(&path, sr) {
+                Ok(bank) => {
+                    info!(
+                        "Loaded sound: {} ({} samples, {} sr)",
+                        path,
+                        bank.data.len(),
+                        sr
+                    );
+                    let arc_data = Arc::new(bank.data);
+                    // Save to cache for next time
+                    if let Ok(mut cache_lock) = cache.lock() {
+                        cache_lock.insert(path.clone(), arc_data.clone());
+                    }
+                    mixer.play_sound(arc_data, 1.0);
+                }
+                Err(e) => {
+                    error!("Failed to load sound {}: {}", path, e);
+                    return Err(format!("Failed to load sound: {}", e));
+                }
+            }
+        }
+
         Ok(())
+    }
+
+    pub fn stop_sound(&self) {
+        self.mixer.stop_sound();
+    }
+
+    pub fn unload_sound(&self, file_path: &str) {
+        if let Ok(mut cache_lock) = self.sound_cache.lock() {
+            cache_lock.remove(file_path);
+            info!("Unloaded sound from cache: {}", file_path);
+        }
     }
 }
 
@@ -219,7 +262,7 @@ fn run_bridge_loop(
     let in_bytes_per_frame = in_format.get_blockalign() as usize;
 
     let capture_thread = std::thread::spawn(move || {
-        wasapi::initialize_mta().ok();
+        let _ = wasapi::initialize_mta();
         while is_running_clone.load(Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(5));
             if let Ok(Some(frames)) = in_capture.get_next_packet_size() {
@@ -238,7 +281,7 @@ fn run_bridge_loop(
         }
     });
 
-    let out_block_align = out_format.get_blockalign() as usize;
+    let _out_block_align = out_format.get_blockalign() as usize;
     let out_channels = out_format.get_nchannels() as usize;
 
     while is_running.load(Ordering::Relaxed) {
