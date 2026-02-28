@@ -3,6 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
+  import { dict } from "$lib/i18n";
 
   interface AudioDevice {
     id: string;
@@ -22,10 +23,15 @@
     default_input_id: string | null;
     default_output_id: string | null;
     global_stop_shortcut: string | null;
+    language: string | null;
   }
 
   // --- State ---
-  let activeTab = $state<"soundboard" | "settings" | "routing">("soundboard");
+  let lang = $state<"en" | "zh">("zh");
+  let t = $derived(dict[lang]);
+  let activeTab = $state<"soundboard" | "settings" | "routing" | "help">(
+    "soundboard",
+  );
   let sounds = $state<SoundItem[]>([]);
   let currentPlayingId = $state<string | null>(null);
   let searchQuery = $state("");
@@ -62,8 +68,20 @@
         selectedInput = config.default_input_id;
       if (config.default_output_id && !selectedOutput)
         selectedOutput = config.default_output_id;
+      if (config.language === "en" || config.language === "zh") {
+        lang = config.language as "en" | "zh";
+      }
     } catch (err) {
       console.error("Failed config load", err);
+    }
+  }
+
+  async function updateLanguage(newLang: "en" | "zh") {
+    lang = newLang;
+    try {
+      await invoke("set_language", { lang: newLang });
+    } catch (err) {
+      console.error(err);
     }
   }
 
@@ -327,31 +345,41 @@
             class="nav-item {activeTab === 'soundboard' ? 'active' : ''}"
             onclick={() => (activeTab = "soundboard")}
           >
-            <span class="icon">🎧</span> Soundboard
+            <span class="icon">🎧</span>
+            {t.tab_soundboard}
           </button>
           <button
             class="nav-item {activeTab === 'routing' ? 'active' : ''}"
             onclick={() => (activeTab = "routing")}
           >
-            <span class="icon">🎛️</span> Audio Routing
+            <span class="icon">🎛️</span>
+            {t.tab_routing}
           </button>
           <button
             class="nav-item {activeTab === 'settings' ? 'active' : ''}"
             onclick={() => (activeTab = "settings")}
           >
-            <span class="icon">⚙️</span> Settings
+            <span class="icon">⚙️</span>
+            {t.tab_settings}
+          </button>
+          <button
+            class="nav-item {activeTab === 'help' ? 'active' : ''}"
+            onclick={() => (activeTab = "help")}
+          >
+            <span class="icon">💡</span>
+            {t.tab_guide}
           </button>
         </nav>
 
         <div class="bridge-status {isBridgeRunning ? 'on' : ''}">
           <div class="dot"></div>
-          <span>{isBridgeRunning ? "Active" : "Offline"}</span>
+          <span>{isBridgeRunning ? t.bridge_active : t.bridge_offline}</span>
         </div>
         <button
           class="toggle-btn"
           onclick={isBridgeRunning ? stopBridge : startBridge}
         >
-          {isBridgeRunning ? "Stop Bridge" : "Start Bridge"}
+          {isBridgeRunning ? t.btn_stop_bridge : t.btn_start_bridge}
         </button>
       </aside>
 
@@ -364,18 +392,18 @@
         {#if activeTab === "soundboard"}
           <header class="content-header">
             <div>
-              <h1>My Soundboard</h1>
-              <p class="subtitle">{sounds.length} sounds loaded</p>
+              <h1>{t.sb_title}</h1>
+              <p class="subtitle">{sounds.length} {t.sb_subtitle}</p>
             </div>
             <div class="header-actions">
               <input
                 type="text"
                 class="search-bar"
-                placeholder="Search Sounds..."
+                placeholder={t.sb_search_placeholder}
                 bind:value={searchQuery}
               />
               <button class="btn-primary" onclick={addSoundFromFile}
-                >+ Add Sound</button
+                >{t.sb_add_sound}</button
               >
             </div>
           </header>
@@ -393,7 +421,7 @@
                   <input
                     type="text"
                     class="hotkey-input"
-                    placeholder="No Hotkey"
+                    placeholder={t.sb_bind_hotkey_prompt}
                     value={sound.shortcut || ""}
                     onkeydown={(e) => {
                       e.preventDefault();
@@ -436,13 +464,13 @@
                     <button
                       class="play-btn play"
                       onclick={() => playSoundItem(sound.id, sound.path)}
-                      disabled={!isBridgeRunning}>▶ Play</button
+                      disabled={!isBridgeRunning}>▶ {t.pl_playing}</button
                     >
                   {/if}
                   <button
                     class="menu-btn"
                     onclick={() => removeSoundItem(sound.id)}
-                    title="Delete Sound">🗑️</button
+                    title={t.sb_btn_remove}>🗑️</button
                   >
                 </div>
               </div>
@@ -452,9 +480,13 @@
 
         {#if activeTab === "routing"}
           <div class="settings-panel">
-            <h1>Audio Routing</h1>
+            <h1>{t.rt_title}</h1>
+            <p class="subtitle" style="margin-bottom: 20px;">
+              {t.rt_subtitle}
+            </p>
+
             <div class="form-group">
-              <label for="input-source">Microphone Input</label>
+              <label for="input-source">{t.rt_mic_input}</label>
               <select
                 id="input-source"
                 bind:value={selectedInput}
@@ -466,7 +498,7 @@
               </select>
             </div>
             <div class="form-group">
-              <label for="output-target">Virtual Output (Cable)</label>
+              <label for="output-target">{t.rt_sb_output}</label>
               <select
                 id="output-target"
                 bind:value={selectedOutput}
@@ -483,8 +515,7 @@
 
             <div class="sliders">
               <div class="slider-box">
-                <label>Microphone Volume ({Math.round(micVolume * 100)}%)</label
-                >
+                <label>{t.rt_mic_vol} ({Math.round(micVolume * 100)}%)</label>
                 <input
                   type="range"
                   min="0"
@@ -495,7 +526,7 @@
                 />
               </div>
               <div class="slider-box">
-                <label>Soundboard Volume ({Math.round(fxVolume * 100)}%)</label>
+                <label>{t.rt_fx_vol} ({Math.round(fxVolume * 100)}%)</label>
                 <input
                   type="range"
                   min="0"
@@ -511,18 +542,55 @@
 
         {#if activeTab === "settings"}
           <div class="settings-panel">
-            <h1>Settings</h1>
+            <h1>{t.st_title}</h1>
 
             <div class="form-group">
-              <label>Global Controls</label>
+              <label>{t.st_lang_label}</label>
               <p class="subtitle" style="margin-bottom: 10px;">
-                Instantly stop all audio playing via Soundboard.
+                {t.st_lang_desc}
+              </p>
+              <div style="display: flex; gap: 15px; margin-top: 5px;">
+                <label
+                  style="display: flex; align-items: center; gap: 5px; cursor: pointer;"
+                >
+                  <input
+                    type="radio"
+                    name="lang"
+                    value="en"
+                    checked={lang === "en"}
+                    onchange={() => updateLanguage("en")}
+                  />
+                  <span style="font-weight: normal;">English</span>
+                </label>
+                <label
+                  style="display: flex; align-items: center; gap: 5px; cursor: pointer;"
+                >
+                  <input
+                    type="radio"
+                    name="lang"
+                    value="zh"
+                    checked={lang === "zh"}
+                    onchange={() => updateLanguage("zh")}
+                  />
+                  <span style="font-weight: normal;">简体中文</span>
+                </label>
+              </div>
+            </div>
+
+            <hr
+              style="border: 0; border-top: 1px solid #f1f5f9; margin: 30px 0;"
+            />
+
+            <div class="form-group">
+              <label>{t.st_global_controls}</label>
+              <p class="subtitle" style="margin-bottom: 10px;">
+                {t.st_global_desc}
               </p>
               <input
                 type="text"
                 class="hotkey-input"
                 style="max-width: 300px; border: 1px solid #e2e8f0; padding: 10px;"
-                placeholder="Click to bind Global Stop Hotkey"
+                placeholder={t.st_global_placeholder}
                 value={globalStopShortcut || ""}
                 onkeydown={(e) => {
                   e.preventDefault();
@@ -562,22 +630,81 @@
             />
 
             <div class="form-group">
-              <label>Custom Background Image</label>
+              <label>{t.st_bg_label}</label>
               <div style="display: flex; gap: 10px; margin-top: 5px;">
                 <button class="btn-primary" onclick={pickBackgroundImage}
-                  >Pick Image</button
+                  >{t.st_bg_pick}</button
                 >
                 {#if bgImagePath}
                   <button class="menu-btn" onclick={clearBackgroundImage}
-                    >Clear</button
+                    >{t.st_bg_clear}</button
                   >
                 {/if}
               </div>
               {#if bgImagePath}
                 <p class="subtitle" style="margin-top: 10px;">
-                  Current: {bgImagePath}
+                  {t.st_bg_current}
+                  {bgImagePath}
                 </p>
               {/if}
+            </div>
+          </div>
+        {/if}
+
+        {#if activeTab === "help"}
+          <div class="settings-panel help-panel">
+            <h1>{t.gd_title}</h1>
+            <p class="subtitle" style="margin-bottom: 20px;">
+              {t.gd_subtitle}
+            </p>
+
+            <div class="guide-card">
+              <div class="guide-step">Step 1</div>
+              <h3>{t.gd_step1_title}</h3>
+              <p>
+                {t.gd_step1_desc}
+              </p>
+              <a
+                href="https://vb-audio.com/Cable/"
+                target="_blank"
+                class="download-link"
+              >
+                {t.gd_step1_btn}
+              </a>
+              <p class="note">{t.gd_step1_note}</p>
+            </div>
+
+            <div class="guide-card">
+              <div class="guide-step">Step 2</div>
+              <h3>{t.gd_step2_title}</h3>
+              <p>
+                {t.gd_step2_desc}
+              </p>
+              <ul>
+                <li>{t.gd_step2_l1}</li>
+                <li>{t.gd_step2_l2}</li>
+              </ul>
+              <div
+                class="note"
+                style="margin-top: 10px; font-size: 0.9em; color: #64748b; background: #f8fafc; padding: 10px; border-radius: 6px;"
+              >
+                {t.gd_step2_tip}
+              </div>
+            </div>
+
+            <div class="guide-card">
+              <div class="guide-step">Step 3</div>
+              <h3>{t.gd_step3_title}</h3>
+              <p>
+                {t.gd_step3_desc}
+              </p>
+              <ul>
+                <li>{t.gd_step3_l1}</li>
+                <li>{t.gd_step3_l2}</li>
+              </ul>
+              <div class="success-box">
+                🎉 {t.gd_step3_success}
+              </div>
             </div>
           </div>
         {/if}
@@ -590,12 +717,12 @@
         {#if currentlyPlayingSound}
           <div class="now-playing">
             <h4>{currentlyPlayingSound.name}</h4>
-            <span>Active</span>
+            <span>{t.pl_playing}</span>
           </div>
         {:else}
           <div class="now-playing empty">
-            <h4>Ready</h4>
-            <span>Select a sound to play</span>
+            <h4>{t.pl_ready}</h4>
+            <span>{t.pl_select}</span>
           </div>
         {/if}
       </div>
@@ -1215,5 +1342,106 @@
     .player-settings {
       display: none; /* Hide volume on tiny screens to save space */
     }
+  }
+  /* ----- Help/Guide Panel ----- */
+  .help-panel {
+    max-width: 800px;
+  }
+
+  .guide-card {
+    background: white;
+    padding: 24px;
+    border-radius: 12px;
+    margin-bottom: 20px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .guide-step {
+    position: absolute;
+    top: -10px;
+    right: -20px;
+    font-size: 8rem;
+    font-weight: 800;
+    color: #f1f5f9;
+    z-index: 0;
+    line-height: 1;
+    user-select: none;
+    pointer-events: none;
+  }
+
+  .guide-card h3 {
+    margin-top: 0;
+    color: #1e293b;
+    font-size: 1.25rem;
+    position: relative;
+    z-index: 1;
+  }
+
+  .guide-card p,
+  .guide-card ul {
+    color: #64748b;
+    font-size: 1rem;
+    line-height: 1.6;
+    position: relative;
+    z-index: 1;
+  }
+
+  .guide-card ul {
+    padding-left: 20px;
+    margin-bottom: 0;
+  }
+
+  .guide-card li {
+    margin-bottom: 8px;
+  }
+
+  strong {
+    color: #334155;
+    font-weight: 600;
+  }
+
+  .download-link {
+    display: inline-block;
+    margin-top: 15px;
+    padding: 10px 20px;
+    background: #0ea5e9;
+    color: white;
+    text-decoration: none;
+    border-radius: 8px;
+    font-weight: 600;
+    transition: background 0.2s;
+    position: relative;
+    z-index: 1;
+  }
+
+  .download-link:hover {
+    background: #0284c7;
+  }
+
+  .note {
+    font-size: 0.85rem;
+    color: #94a3b8 !important;
+    margin-top: 10px;
+    font-style: italic;
+  }
+
+  .success-box {
+    margin-top: 20px;
+    padding: 16px;
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    border-radius: 8px;
+    color: #166534;
+    position: relative;
+    z-index: 1;
+  }
+
+  .inline-btn {
+    padding: 4px 10px;
+    font-size: 0.85rem;
+    margin: 0 5px;
   }
 </style>

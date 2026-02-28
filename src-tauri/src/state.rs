@@ -18,6 +18,7 @@ pub struct AppConfig {
     pub default_input_id: Option<String>,
     pub default_output_id: Option<String>,
     pub global_stop_shortcut: Option<String>,
+    pub language: Option<String>,
 }
 
 pub struct SoundManager {
@@ -121,6 +122,13 @@ impl SoundManager {
     pub fn update_global_stop_shortcut(&self, shortcut: Option<String>) {
         if let Ok(mut config) = self.config.lock() {
             config.global_stop_shortcut = shortcut;
+        }
+        self.save();
+    }
+
+    pub fn set_language(&self, lang: Option<String>) {
+        if let Ok(mut config) = self.config.lock() {
+            config.language = lang;
         }
         self.save();
     }

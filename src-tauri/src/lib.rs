@@ -192,6 +192,11 @@ fn set_default_devices(
     state.set_default_devices(input_id, output_id)
 }
 
+#[tauri::command]
+fn set_language(lang: Option<String>, state: tauri::State<'_, state::SoundManager>) {
+    state.set_language(lang)
+}
+
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
@@ -364,6 +369,7 @@ pub fn run() {
             set_bg_image,
             set_default_devices,
             update_global_stop_shortcut,
+            set_language,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
