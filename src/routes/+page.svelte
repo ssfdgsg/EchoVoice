@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
@@ -16,14 +16,26 @@
     shortcut: string | null;
   }
 
-  let activeTab = $state<"soundboard" | "settings">("soundboard");
+  interface AppConfig {
+    sounds: SoundItem[];
+    bg_image_path: string | null;
+    default_input_id: string | null;
+    default_output_id: string | null;
+    global_stop_shortcut: string | null;
+  }
+
+  // --- State ---
+  let activeTab = $state<"soundboard" | "settings" | "routing">("soundboard");
   let sounds = $state<SoundItem[]>([]);
   let currentPlayingId = $state<string | null>(null);
+  let searchQuery = $state("");
 
-  // --- Progress Bar State ---
   let progressRatio = $state<number>(0);
   let isSeeking = $state<boolean>(false);
   let progressInterval: number | null = null;
+  let currentlyPlayingSound = $derived(
+    sounds.find((s) => s.id === currentPlayingId),
+  );
 
   let inputDevices = $state<AudioDevice[]>([]);
   let outputDevices = $state<AudioDevice[]>([]);
@@ -36,7 +48,79 @@
   let micVolume = $state(1.0);
   let fxVolume = $state(1.0);
 
-  // --- Volume ---
+  let bgImagePath = $state<string | null>(null);
+  let globalStopShortcut = $state<string | null>(null);
+
+  // --- App Config & Data ---
+  async function loadConfig() {
+    try {
+      const config: AppConfig = await invoke("get_app_config");
+      sounds = config.sounds || [];
+      bgImagePath = config.bg_image_path;
+      globalStopShortcut = config.global_stop_shortcut;
+      if (config.default_input_id && !selectedInput)
+        selectedInput = config.default_input_id;
+      if (config.default_output_id && !selectedOutput)
+        selectedOutput = config.default_output_id;
+    } catch (err) {
+      console.error("Failed config load", err);
+    }
+  }
+
+  async function loadDevices() {
+    try {
+      errorMsg = "";
+      inputDevices = await invoke("get_input_devices");
+      outputDevices = await invoke("get_output_devices");
+
+      if (inputDevices.length > 0 && !selectedInput) {
+        selectedInput = inputDevices[0].id;
+      }
+      if (outputDevices.length > 0 && !selectedOutput) {
+        selectedOutput = outputDevices[0].id;
+      }
+    } catch (err) {
+      console.error("Failed to load devices", err);
+      errorMsg = String(err);
+    }
+  }
+
+  async function saveDefaultDevices() {
+    try {
+      await invoke("set_default_devices", {
+        inputId: selectedInput,
+        outputId: selectedOutput,
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function pickBackgroundImage() {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [
+          { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
+        ],
+      });
+      if (selected) {
+        bgImagePath = selected as string;
+        await invoke("set_bg_image", { path: bgImagePath });
+      }
+    } catch (err) {
+      console.error("Failed bg image", err);
+    }
+  }
+
+  async function clearBackgroundImage() {
+    try {
+      bgImagePath = null;
+      await invoke("set_bg_image", { path: null });
+    } catch (err) {}
+  }
+
+  // --- Volumes ---
   async function updateMicVolume() {
     try {
       await invoke("set_mic_volume", {
@@ -57,46 +141,14 @@
     }
   }
 
-  // --- Devices ---
-  async function loadDevices() {
-    try {
-      errorMsg = "";
-      inputDevices = await invoke("get_input_devices");
-      outputDevices = await invoke("get_output_devices");
-
-      if (inputDevices.length > 0 && !selectedInput) {
-        selectedInput = inputDevices[0].id;
-      }
-      if (outputDevices.length > 0 && !selectedOutput) {
-        selectedOutput = outputDevices[0].id;
-      }
-    } catch (err) {
-      console.error("Failed to load devices", err);
-      errorMsg = String(err);
-    }
-  }
-
   // --- Sounds ---
-  async function loadSounds() {
-    try {
-      sounds = await invoke("get_sounds");
-    } catch (err) {
-      console.error("Failed to load sounds", err);
-    }
-  }
-
   async function addSoundFromFile() {
     try {
       const selected = await open({
         multiple: false,
-        filters: [
-          {
-            name: "Audio Files",
-            extensions: ["wav", "mp3", "ogg"],
-          },
-        ],
+        filters: [{ name: "Audio Files", extensions: ["wav", "mp3", "ogg"] }],
       });
-      if (selected === null) return;
+      if (!selected) return;
 
       const path = selected as string;
       const name = path.split("\\").pop()?.split("/").pop() || "Unknown Sound";
@@ -104,9 +156,8 @@
 
       const newItem: SoundItem = { id, name, path, shortcut: null };
       await invoke("add_sound", { item: newItem });
-      await loadSounds();
+      await loadConfig(); // Reload from backend
     } catch (err) {
-      console.error("Failed to add sound", err);
       errorMsg = String(err);
     }
   }
@@ -114,12 +165,10 @@
   async function removeSoundItem(id: string) {
     try {
       await invoke("remove_sound", { id });
-      if (currentPlayingId === id) {
-        currentPlayingId = null;
-      }
-      await loadSounds();
+      if (currentPlayingId === id) currentPlayingId = null;
+      await loadConfig();
     } catch (err) {
-      console.error("Failed to remove sound", err);
+      console.error("Remove err", err);
     }
   }
 
@@ -130,7 +179,6 @@
       await invoke("play_sound", { filePath: path });
       startProgressPolling();
     } catch (err) {
-      console.error("Failed to play sound", err);
       errorMsg = String(err);
       currentPlayingId = null;
     }
@@ -142,7 +190,7 @@
       currentPlayingId = null;
       stopProgressPolling();
     } catch (err) {
-      console.error("Failed to stop sound", err);
+      console.error("Stop err", err);
     }
   }
 
@@ -157,11 +205,8 @@
         );
         if (state) {
           const [pos, len] = state;
-          if (len > 0) {
-            progressRatio = (pos / len) * 100;
-          }
+          if (len > 0) progressRatio = (pos / len) * 100;
           if (pos >= len) {
-            // finished playing
             currentPlayingId = null;
             stopProgressPolling();
           }
@@ -169,9 +214,7 @@
           currentPlayingId = null;
           stopProgressPolling();
         }
-      } catch (e) {
-        console.error("Polling error", e);
-      }
+      } catch (e) {}
     }, 100);
   }
 
@@ -188,27 +231,29 @@
     const ratio = parseFloat(target.value) / 100.0;
     try {
       await invoke("seek_sound", { positionRatio: ratio });
-    } catch (err) {
-      console.error("Failed to seek", err);
-    }
+    } catch (err) {}
   }
 
   async function updateSoundShortcut(id: string, shortcut: string | null) {
     try {
       await invoke("update_shortcut", { id, shortcut });
-      await loadSounds();
-    } catch (err) {
-      console.error("Failed to update shortcut", err);
-    }
+      await loadConfig();
+    } catch (err) {}
+  }
+
+  async function updateGlobalStopShortcut(shortcut: string | null) {
+    try {
+      await invoke("update_global_stop_shortcut", { shortcut });
+      await loadConfig();
+    } catch (err) {}
   }
 
   // --- Bridge ---
   async function startBridge() {
     if (!selectedInput || !selectedOutput) {
-      errorMsg = "Please select both input and output devices.";
+      errorMsg = "Select both input and output devices.";
       return;
     }
-
     try {
       errorMsg = "";
       await invoke("start_bridge", {
@@ -216,8 +261,8 @@
         outputDeviceId: selectedOutput,
       });
       isBridgeRunning = true;
+      saveDefaultDevices();
     } catch (err) {
-      console.error("Failed to start bridge", err);
       errorMsg = String(err);
     }
   }
@@ -229,21 +274,17 @@
       isBridgeRunning = false;
       currentPlayingId = null;
     } catch (err) {
-      console.error("Failed to stop bridge", err);
       errorMsg = String(err);
     }
   }
 
-  onMount(() => {
-    loadDevices();
-    loadSounds();
+  onMount(async () => {
+    await loadConfig();
+    await loadDevices();
 
     listen("toggle-bridge", () => {
-      if (isBridgeRunning) {
-        stopBridge();
-      } else {
-        startBridge();
-      }
+      if (isBridgeRunning) stopBridge();
+      else startBridge();
     });
 
     listen<string>("shortcut-play", (event) => {
@@ -251,85 +292,108 @@
       progressRatio = 0;
       startProgressPolling();
     });
+
+    listen("global-stop", () => {
+      currentPlayingId = null;
+      stopProgressPolling();
+    });
   });
+
+  // Derived filtered sounds
+  let filteredSounds = $derived(
+    sounds.filter((s) =>
+      s.name.toLowerCase().includes(searchQuery.toLowerCase()),
+    ),
+  );
 </script>
 
-<main class="container">
-  <div class="card">
-    <h1>EchoVoice</h1>
-
-    <!-- Tab Bar -->
-    <div class="tab-bar">
-      <button
-        class="tab-btn"
-        class:active={activeTab === "soundboard"}
-        onclick={() => (activeTab = "soundboard")}
-      >
-        🎵 Soundboard
-      </button>
-      <button
-        class="tab-btn"
-        class:active={activeTab === "settings"}
-        onclick={() => (activeTab = "settings")}
-      >
-        ⚙️ Settings
-      </button>
-    </div>
-
-    <!-- Error Banner -->
-    {#if errorMsg}
-      <div class="error-banner">
-        {errorMsg}
-      </div>
-    {/if}
-
-    <!-- Bridge Status Pill -->
-    <div class="bridge-status" class:on={isBridgeRunning}>
-      {isBridgeRunning ? "● Bridge ON" : "○ Bridge OFF"}
-    </div>
-
-    <!-- ==================== SOUNDBOARD TAB ==================== -->
-    {#if activeTab === "soundboard"}
-      <div class="tab-content">
-        <div class="actions" style="margin-top: 0;">
-          <button
-            class="btn-start"
-            style="width:100%;"
-            onclick={addSoundFromFile}
-          >
-            + Add Audio File
-          </button>
-          {#if currentPlayingId}
-            <button
-              class="btn-stop"
-              style="width:100%;"
-              onclick={stopCurrentSound}
-            >
-              ■ Stop
-            </button>
-          {/if}
+<div
+  class="app-wrapper"
+  style="background-image: {bgImagePath
+    ? `url(${convertFileSrc(bgImagePath)})`
+    : 'none'}"
+>
+  <div class="main-window">
+    <div class="main-content-wrapper">
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="logo">
+          <span class="logo-icon">🔊</span>
+          <h2>EchoVoice</h2>
         </div>
 
-        {#if sounds.length === 0}
-          <p class="empty-hint">
-            No sounds yet. Click "Add Audio File" to import .wav or .mp3 files.
-          </p>
-        {:else}
-          <div class="sound-list">
-            {#each sounds as sound}
-              <div
-                class="sound-item"
-                class:playing={currentPlayingId === sound.id}
+        <nav class="nav-menu">
+          <button
+            class="nav-item {activeTab === 'soundboard' ? 'active' : ''}"
+            onclick={() => (activeTab = "soundboard")}
+          >
+            <span class="icon">🎧</span> Soundboard
+          </button>
+          <button
+            class="nav-item {activeTab === 'routing' ? 'active' : ''}"
+            onclick={() => (activeTab = "routing")}
+          >
+            <span class="icon">🎛️</span> Audio Routing
+          </button>
+          <button
+            class="nav-item {activeTab === 'settings' ? 'active' : ''}"
+            onclick={() => (activeTab = "settings")}
+          >
+            <span class="icon">⚙️</span> Settings
+          </button>
+        </nav>
+
+        <div class="bridge-status {isBridgeRunning ? 'on' : ''}">
+          <div class="dot"></div>
+          <span>{isBridgeRunning ? "Active" : "Offline"}</span>
+        </div>
+        <button
+          class="toggle-btn"
+          onclick={isBridgeRunning ? stopBridge : startBridge}
+        >
+          {isBridgeRunning ? "Stop Bridge" : "Start Bridge"}
+        </button>
+      </aside>
+
+      <!-- Main Content -->
+      <main class="content-area">
+        {#if errorMsg}
+          <div class="error-banner">{errorMsg}</div>
+        {/if}
+
+        {#if activeTab === "soundboard"}
+          <header class="content-header">
+            <div>
+              <h1>My Soundboard</h1>
+              <p class="subtitle">{sounds.length} sounds loaded</p>
+            </div>
+            <div class="header-actions">
+              <input
+                type="text"
+                class="search-bar"
+                placeholder="Search Sounds..."
+                bind:value={searchQuery}
+              />
+              <button class="btn-primary" onclick={addSoundFromFile}
+                >+ Add Sound</button
               >
-                <div class="sound-info">
-                  <strong>{sound.name}</strong>
-                  <span class="path">{sound.path}</span>
+            </div>
+          </header>
+
+          <div class="sound-grid">
+            {#each filteredSounds as sound}
+              <div
+                class={`sound-card ${currentPlayingId === sound.id ? "playing" : ""}`}
+              >
+                <div class="card-icon">
+                  {sound.name.charAt(0).toUpperCase()}
                 </div>
-                <div class="sound-actions">
+                <div class="card-info">
+                  <h3>{sound.name}</h3>
                   <input
                     type="text"
-                    class="shortcut-input"
-                    placeholder="Hotkey"
+                    class="hotkey-input"
+                    placeholder="No Hotkey"
                     value={sound.shortcut || ""}
                     onkeydown={(e) => {
                       e.preventDefault();
@@ -337,7 +401,6 @@
                       if (e.ctrlKey) keys.push("CommandOrControl");
                       if (e.altKey) keys.push("Alt");
                       if (e.shiftKey) keys.push("Shift");
-
                       const nonModifiers = [
                         "Control",
                         "Alt",
@@ -363,511 +426,632 @@
                     }}
                     readonly
                   />
+                </div>
+                <div class="card-actions">
                   {#if currentPlayingId === sound.id}
-                    <button
-                      class="btn-sm btn-playing"
-                      onclick={stopCurrentSound}>■</button
+                    <button class="play-btn stop" onclick={stopCurrentSound}
+                      >■</button
                     >
                   {:else}
                     <button
-                      class="btn-sm"
+                      class="play-btn play"
                       onclick={() => playSoundItem(sound.id, sound.path)}
-                      disabled={!isBridgeRunning}>▶</button
+                      disabled={!isBridgeRunning}>▶ Play</button
                     >
                   {/if}
                   <button
-                    class="btn-sm btn-del"
-                    onclick={() => removeSoundItem(sound.id)}>✕</button
+                    class="menu-btn"
+                    onclick={() => removeSoundItem(sound.id)}
+                    title="Delete Sound">🗑️</button
                   >
                 </div>
-                <!-- Progress Bar (Only visible if this item is playing) -->
-                {#if currentPlayingId === sound.id}
-                  <div class="progress-container">
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      bind:value={progressRatio}
-                      onmousedown={() => {
-                        isSeeking = true;
-                      }}
-                      onmouseup={(e) => {
-                        isSeeking = false;
-                        handleSeek(e);
-                      }}
-                      oninput={(e) => handleSeek(e)}
-                      class="progress-bar"
-                    />
-                  </div>
-                {/if}
               </div>
             {/each}
           </div>
         {/if}
-      </div>
 
-      <!-- ==================== SETTINGS TAB ==================== -->
-    {:else}
-      <div class="tab-content">
-        <div class="form-group">
-          <label for="input">Input (Microphone)</label>
-          <select
-            id="input"
-            bind:value={selectedInput}
-            disabled={isBridgeRunning}
-          >
-            {#each inputDevices as device}
-              <option value={device.id}>{device.name}</option>
-            {/each}
-          </select>
-        </div>
+        {#if activeTab === "routing"}
+          <div class="settings-panel">
+            <h1>Audio Routing</h1>
+            <div class="form-group">
+              <label for="input-source">Microphone Input</label>
+              <select
+                id="input-source"
+                bind:value={selectedInput}
+                onchange={saveDefaultDevices}
+              >
+                {#each inputDevices as dev}
+                  <option value={dev.id}>{dev.name}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="output-target">Virtual Output (Cable)</label>
+              <select
+                id="output-target"
+                bind:value={selectedOutput}
+                onchange={saveDefaultDevices}
+              >
+                {#each outputDevices as dev}
+                  <option value={dev.id}>{dev.name}</option>
+                {/each}
+              </select>
+              <small
+                >Route this output into Discord/OBS as your microphone.</small
+              >
+            </div>
 
-        <div class="form-group">
-          <label for="output">Output (Virtual Cable / Speakers)</label>
-          <select
-            id="output"
-            bind:value={selectedOutput}
-            disabled={isBridgeRunning}
-          >
-            {#each outputDevices as device}
-              <option value={device.id}>{device.name}</option>
-            {/each}
-          </select>
-        </div>
-
-        <div class="actions">
-          <button
-            class="btn-refresh"
-            onclick={loadDevices}
-            disabled={isBridgeRunning}
-          >
-            Refresh Devices
-          </button>
-
-          {#if isBridgeRunning}
-            <button class="btn-stop" onclick={stopBridge}> Stop Bridge </button>
-          {:else}
-            <button class="btn-start" onclick={startBridge}>
-              Start Bridge
-            </button>
-          {/if}
-        </div>
-
-        {#if isBridgeRunning}
-          <hr style="border-color: rgba(255,255,255,0.1); margin: 25px 0;" />
-          <p class="section-title">Volume Controls</p>
-
-          <div class="form-group slide-group">
-            <label for="micVol">Mic Volume: {micVolume.toFixed(2)}x</label>
-            <input
-              id="micVol"
-              type="range"
-              min="0"
-              max="2"
-              step="0.1"
-              bind:value={micVolume}
-              oninput={updateMicVolume}
-            />
+            <div class="sliders">
+              <div class="slider-box">
+                <label>Microphone Volume ({Math.round(micVolume * 100)}%)</label
+                >
+                <input
+                  type="range"
+                  min="0"
+                  max="2"
+                  step="0.05"
+                  bind:value={micVolume}
+                  oninput={updateMicVolume}
+                />
+              </div>
+              <div class="slider-box">
+                <label>Soundboard Volume ({Math.round(fxVolume * 100)}%)</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="2"
+                  step="0.05"
+                  bind:value={fxVolume}
+                  oninput={updateFxVolume}
+                />
+              </div>
+            </div>
           </div>
+        {/if}
 
-          <div class="form-group slide-group">
-            <label for="fxVol">Soundboard Volume: {fxVolume.toFixed(2)}x</label>
-            <input
-              id="fxVol"
-              type="range"
-              min="0"
-              max="2"
-              step="0.1"
-              bind:value={fxVolume}
-              oninput={updateFxVolume}
+        {#if activeTab === "settings"}
+          <div class="settings-panel">
+            <h1>Settings</h1>
+
+            <div class="form-group">
+              <label>Global Controls</label>
+              <p class="subtitle" style="margin-bottom: 10px;">
+                Instantly stop all audio playing via Soundboard.
+              </p>
+              <input
+                type="text"
+                class="hotkey-input"
+                style="max-width: 300px; border: 1px solid #e2e8f0; padding: 10px;"
+                placeholder="Click to bind Global Stop Hotkey"
+                value={globalStopShortcut || ""}
+                onkeydown={(e) => {
+                  e.preventDefault();
+                  let keys: string[] = [];
+                  if (e.ctrlKey) keys.push("CommandOrControl");
+                  if (e.altKey) keys.push("Alt");
+                  if (e.shiftKey) keys.push("Shift");
+                  const nonModifiers = [
+                    "Control",
+                    "Alt",
+                    "Shift",
+                    "Meta",
+                    "Escape",
+                  ];
+                  if (
+                    e.key === "Escape" ||
+                    e.key === "Backspace" ||
+                    e.key === "Delete"
+                  ) {
+                    updateGlobalStopShortcut(null);
+                    e.currentTarget.blur();
+                    return;
+                  }
+                  if (!nonModifiers.includes(e.key)) {
+                    keys.push(e.key.toUpperCase());
+                    const combo = keys.join("+");
+                    updateGlobalStopShortcut(combo);
+                    e.currentTarget.blur();
+                  }
+                }}
+                readonly
+              />
+            </div>
+
+            <hr
+              style="border: 0; border-top: 1px solid #f1f5f9; margin: 30px 0;"
             />
+
+            <div class="form-group">
+              <label>Custom Background Image</label>
+              <div style="display: flex; gap: 10px; margin-top: 5px;">
+                <button class="btn-primary" onclick={pickBackgroundImage}
+                  >Pick Image</button
+                >
+                {#if bgImagePath}
+                  <button class="menu-btn" onclick={clearBackgroundImage}
+                    >Clear</button
+                  >
+                {/if}
+              </div>
+              {#if bgImagePath}
+                <p class="subtitle" style="margin-top: 10px;">
+                  Current: {bgImagePath}
+                </p>
+              {/if}
+            </div>
+          </div>
+        {/if}
+      </main>
+    </div>
+
+    <!-- Bottom Player -->
+    <div class="bottom-player">
+      <div class="player-info">
+        {#if currentlyPlayingSound}
+          <div class="now-playing">
+            <h4>{currentlyPlayingSound.name}</h4>
+            <span>Active</span>
+          </div>
+        {:else}
+          <div class="now-playing empty">
+            <h4>Ready</h4>
+            <span>Select a sound to play</span>
           </div>
         {/if}
       </div>
-    {/if}
+
+      <div class="player-controls">
+        <div class="playback-buttons">
+          {#if currentPlayingId}
+            <button class="ctrl-btn stop-circle" onclick={stopCurrentSound}
+              >■</button
+            >
+          {:else}
+            <button class="ctrl-btn play-circle" disabled>▶</button>
+          {/if}
+        </div>
+        <div class="progress-bar-container">
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="0.1"
+            class="progress-bar"
+            bind:value={progressRatio}
+            onmousedown={() => {
+              isSeeking = true;
+            }}
+            onmouseup={(e) => {
+              isSeeking = false;
+              handleSeek(e);
+            }}
+            oninput={(e) => handleSeek(e)}
+            disabled={!currentPlayingId}
+          />
+        </div>
+      </div>
+
+      <div class="player-settings">
+        <div class="vol-control">
+          <span>🔊 Volume</span>
+          <input
+            type="range"
+            min="0"
+            max="2"
+            step="0.05"
+            bind:value={fxVolume}
+            oninput={updateFxVolume}
+            class="mini-slider"
+          />
+        </div>
+      </div>
+    </div>
   </div>
-</main>
+</div>
 
 <style>
-  :root {
+  :global(body) {
+    margin: 0;
     font-family:
       "Inter",
-      system-ui,
       -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      Roboto,
+      Helvetica,
+      Arial,
       sans-serif;
-    font-size: 16px;
-    background: linear-gradient(135deg, #1e1e24 0%, #17181f 100%);
-    color: #e2e8f0;
-    margin: 0;
-    padding: 0;
-    height: 100vh;
+    color: #333;
     overflow: hidden;
   }
 
-  .container {
+  .app-wrapper {
+    width: 100vw;
     height: 100vh;
+    background: linear-gradient(135deg, #f0f4fd 0%, #e0e8f8 100%);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
     display: flex;
-    justify-content: center;
     align-items: center;
-    padding: 20px;
+    justify-content: center;
+    padding: 2vw;
     box-sizing: border-box;
   }
 
-  .card {
-    background: rgba(255, 255, 255, 0.05);
-    backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 20px;
-    padding: 30px;
+  .main-window {
     width: 100%;
-    max-width: 480px;
-    max-height: 88vh;
-    overflow-y: auto;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-  }
-
-  .card::-webkit-scrollbar {
-    width: 6px;
-  }
-  .card::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 3px;
-  }
-
-  h1 {
-    margin: 0;
-    font-size: 2rem;
-    font-weight: 800;
-    background: linear-gradient(to right, #60a5fa, #a78bfa);
-    background-clip: text;
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    text-align: center;
-  }
-
-  /* ---------- Tab Bar ---------- */
-  .tab-bar {
+    max-width: 1200px;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(20px);
+    border-radius: 16px;
+    box-shadow:
+      0 20px 40px rgba(0, 0, 0, 0.1),
+      0 1px 3px rgba(0, 0, 0, 0.05);
     display: flex;
-    gap: 4px;
-    margin: 16px 0 12px;
-    background: rgba(0, 0, 0, 0.25);
-    border-radius: 10px;
-    padding: 4px;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+    border: 1px solid rgba(255, 255, 255, 0.5);
   }
 
-  .tab-btn {
+  .main-content-wrapper {
+    display: flex;
     flex: 1;
-    padding: 10px 0;
-    border-radius: 8px;
+    min-height: 0; /* Important for scrollable children in flexbox */
+  }
+
+  /* --- Sidebar --- */
+  .sidebar {
+    width: 240px;
+    flex-shrink: 0;
+    background: rgba(250, 250, 250, 0.5);
+    border-right: 1px solid rgba(0, 0, 0, 0.05);
+    padding: 30px 20px;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 40px;
+  }
+
+  .logo-icon {
+    font-size: 24px;
+  }
+
+  .logo h2 {
+    margin: 0;
+    font-size: 1.2rem;
+    font-weight: 700;
+  }
+
+  .nav-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex-grow: 1;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 12px 16px;
     border: none;
     background: transparent;
-    color: #94a3b8;
-    font-size: 0.9rem;
+    border-radius: 10px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #64748b;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.2s ease;
+  }
+
+  .nav-item:hover {
+    background: rgba(255, 255, 255, 0.6);
+    color: #1e293b;
+  }
+
+  .nav-item.active {
+    background: #ffffff;
+    color: #1e293b;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  }
+
+  .bridge-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: #64748b;
+    margin-bottom: 12px;
+    padding: 0 10px;
+  }
+
+  .bridge-status .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ef4444;
+  }
+  .bridge-status.on .dot {
+    background: #10b981;
+    box-shadow: 0 0 8px #10b981;
+  }
+
+  .toggle-btn {
+    width: 100%;
+    padding: 12px;
+    border-radius: 10px;
+    border: none;
+    background: #f1f5f9;
+    color: #334155;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.25s ease;
+    transition: all 0.2s ease;
+  }
+  .toggle-btn:hover {
+    background: #e2e8f0;
   }
 
-  .tab-btn.active {
-    background: rgba(255, 255, 255, 0.1);
-    color: #f1f5f9;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  /* --- Content Area --- */
+  .content-area {
+    flex: 1;
+    min-width: 0;
+    padding: 40px;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 
-  .tab-btn:hover:not(.active) {
-    color: #cbd5e1;
+  .content-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 30px;
+    flex-wrap: wrap;
+    gap: 15px;
   }
 
-  .tab-content {
-    animation: fadeIn 0.2s ease;
+  .content-header h1 {
+    margin: 0 0 4px 0;
+    font-size: clamp(1.4rem, 2vw, 1.8rem);
+    color: #0f172a;
   }
 
-  @keyframes fadeIn {
-    from {
-      opacity: 0;
-      transform: translateY(4px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  /* ---------- Bridge Status ---------- */
-  .bridge-status {
-    text-align: center;
-    font-size: 0.8rem;
-    font-weight: 700;
-    padding: 6px 0;
-    margin-bottom: 12px;
-    border-radius: 20px;
-    background: rgba(239, 68, 68, 0.15);
-    color: #fca5a5;
-    letter-spacing: 0.5px;
-  }
-
-  .bridge-status.on {
-    background: rgba(34, 197, 94, 0.15);
-    color: #86efac;
-  }
-
-  /* ---------- Forms ---------- */
-  .form-group {
-    margin-bottom: 16px;
-  }
-
-  label {
-    display: block;
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: #cbd5e1;
-    margin-bottom: 6px;
-  }
-
-  select {
-    width: 100%;
-    padding: 10px 14px;
-    border-radius: 10px;
-    background: rgba(0, 0, 0, 0.2);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #f8fafc;
+  .subtitle {
+    margin: 0;
+    color: #64748b;
     font-size: 0.95rem;
+  }
+
+  .header-actions {
+    display: flex;
+    gap: 15px;
+  }
+
+  .search-bar {
+    padding: 10px 16px;
+    border-radius: 20px;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    width: 100%;
+    max-width: 250px;
     outline: none;
-    transition: all 0.3s ease;
-    -webkit-appearance: none;
-    box-sizing: border-box;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+  .search-bar:focus {
+    background: #fff;
+    border-color: #cbd5e1;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
   }
 
-  select:focus {
-    border-color: #60a5fa;
-    box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.2);
+  .btn-primary {
+    background: #3b82f6;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 20px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .btn-primary:hover {
+    background: #2563eb;
   }
 
-  select:disabled {
+  /* --- Sound Grid --- */
+  .sound-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 20px;
+  }
+
+  .sound-card {
+    background: #ffffff;
+    border-radius: 16px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
+    border: 1px solid #f1f5f9;
+    transition:
+      transform 0.2s,
+      box-shadow 0.2s;
+  }
+  .sound-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.06);
+  }
+  .sound-card.playing {
+    border: 1px solid #3b82f6;
+    box-shadow: 0 8px 25px rgba(59, 130, 246, 0.15);
+  }
+
+  .card-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: #eff6ff;
+    color: #3b82f6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+
+  .card-info h3 {
+    margin: 0 0 6px 0;
+    font-size: 1.05rem;
+    color: #1e293b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .hotkey-input {
+    width: 100%;
+    border: none;
+    background: #f8fafc;
+    color: #64748b;
+    font-size: 0.8rem;
+    padding: 4px 8px;
+    border-radius: 6px;
+    margin-bottom: 15px;
+    cursor: text;
+    outline: none;
+  }
+  .hotkey-input:focus {
+    background: #ebf0f5;
+  }
+
+  .card-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: auto;
+  }
+
+  .play-btn {
+    flex-grow: 1;
+    border: none;
+    padding: 8px;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    background: #fdba74;
+    color: #c2410c;
+    transition: all 0.2s;
+  }
+  .play-btn.play:hover {
+    background: #f97316;
+    color: white;
+  }
+  .play-btn.stop {
+    background: #fca5a5;
+    color: #991b1b;
+  }
+  .play-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }
 
-  select option {
-    background: #1e293b;
-    color: #f8fafc;
-    padding: 10px;
-  }
-
-  .slide-group {
-    margin-bottom: 12px;
-  }
-
-  input[type="range"] {
-    width: 100%;
-    accent-color: #60a5fa;
-    cursor: pointer;
-  }
-
-  .section-title {
-    text-align: center;
-    color: #94a3b8;
-    margin: 0 0 14px;
-    font-size: 0.9rem;
-    font-weight: 600;
-  }
-
-  /* ---------- Actions ---------- */
-  .actions {
-    display: flex;
-    gap: 10px;
-    margin-top: 20px;
-  }
-
-  button {
-    flex: 1;
-    padding: 12px 16px;
-    border-radius: 10px;
+  .menu-btn {
+    width: 36px;
+    background: #f1f5f9;
     border: none;
-    font-size: 0.9rem;
-    font-weight: 700;
-    cursor: pointer;
-    transition: all 0.25s ease;
-  }
-
-  button:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .btn-refresh {
-    background: rgba(255, 255, 255, 0.1);
-    color: #e2e8f0;
-  }
-
-  .btn-refresh:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.2);
-  }
-
-  .btn-start {
-    background: linear-gradient(to right, #3b82f6, #8b5cf6);
-    color: white;
-    box-shadow: 0 4px 14px 0 rgba(139, 92, 246, 0.39);
-  }
-
-  .btn-start:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 6px 20px rgba(139, 92, 246, 0.5);
-  }
-
-  .btn-stop {
-    background: linear-gradient(to right, #ef4444, #f43f5e);
-    color: white;
-    box-shadow: 0 4px 14px 0 rgba(239, 68, 68, 0.39);
-  }
-
-  .btn-stop:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 6px 20px rgba(239, 68, 68, 0.5);
-  }
-
-  .error-banner {
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid rgba(239, 68, 68, 0.2);
-    color: #fca5a5;
-    padding: 10px;
     border-radius: 8px;
-    margin-bottom: 12px;
-    font-size: 0.85rem;
-    text-align: center;
-  }
-
-  .empty-hint {
-    text-align: center;
+    cursor: pointer;
     color: #64748b;
-    font-size: 0.85rem;
-    margin: 30px 0;
+  }
+  .menu-btn:hover {
+    background: #e2e8f0;
   }
 
-  /* ---------- Sound List ---------- */
-  .sound-list {
-    margin-top: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .sound-item {
+  /* --- Bottom Player --- */
+  .bottom-player {
+    height: 80px;
+    flex-shrink: 0;
+    background: #ffffff;
+    border-top: 1px solid rgba(0, 0, 0, 0.05);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background: rgba(0, 0, 0, 0.2);
-    padding: 9px 12px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    transition: all 0.2s ease;
+    padding: 0 30px;
+    z-index: 10;
+    gap: 15px;
   }
 
-  .sound-item.playing {
-    border-color: rgba(96, 165, 250, 0.4);
-    background: rgba(96, 165, 250, 0.08);
-  }
-
-  .sound-info {
+  .player-info {
     display: flex;
-    flex-direction: column;
-    overflow: hidden;
+    align-items: center;
     flex: 1;
     min-width: 0;
   }
 
-  .sound-info strong {
-    font-size: 0.88rem;
+  .now-playing h4 {
+    margin: 0;
+    font-size: 0.95rem;
+    color: #1e293b;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-
-  .sound-info .path {
-    font-size: 0.7rem;
+  .now-playing span {
+    font-size: 0.8rem;
+    color: #10b981;
+  }
+  .now-playing.empty span {
     color: #94a3b8;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
-  .sound-actions {
+  .player-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    flex: 2;
+    min-width: 200px;
+  }
+
+  .ctrl-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
     display: flex;
     align-items: center;
-    gap: 5px;
-    margin-left: 8px;
-    flex-shrink: 0;
-  }
-
-  .shortcut-input {
-    width: 80px;
-    padding: 4px 6px !important;
-    font-size: 0.7rem !important;
-    text-align: center;
-    border-radius: 6px !important;
-    background: rgba(255, 255, 255, 0.08) !important;
-    border: 1px solid transparent !important;
-    color: #cbd5e1 !important;
+    justify-content: center;
     cursor: pointer;
-    outline: none !important;
-    box-sizing: border-box;
+    font-size: 16px;
+    transition: all 0.2s;
   }
-
-  .shortcut-input:focus {
-    background: rgba(96, 165, 250, 0.15) !important;
-    border-color: #60a5fa !important;
-    box-shadow: none !important;
+  .play-circle {
+    background: #3b82f6;
+    color: white;
   }
-
-  .btn-sm {
-    padding: 5px 10px;
-    font-size: 0.8rem;
-    border-radius: 6px;
-    background: rgba(255, 255, 255, 0.1);
-    border: none;
-    color: #e2e8f0;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    flex: none;
+  .stop-circle {
+    background: #ef4444;
+    color: white;
   }
-
-  .btn-sm:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.2);
-  }
-
-  .btn-sm:disabled {
-    opacity: 0.3;
+  .ctrl-btn:disabled {
+    background: #cbd5e1;
     cursor: not-allowed;
   }
 
-  .btn-playing {
-    background: rgba(239, 68, 68, 0.3);
-    color: #fca5a5;
-  }
-
-  .btn-playing:hover {
-    background: rgba(239, 68, 68, 0.5) !important;
-  }
-
-  .btn-del {
-    background: rgba(239, 68, 68, 0.15);
-    color: #fca5a5;
-  }
-
-  .btn-del:hover {
-    background: rgba(239, 68, 68, 0.35);
-  }
-
-  /* ---------- Progress Bar ---------- */
-  .progress-container {
-    padding: 0 12px 10px 12px;
-    background: rgba(96, 165, 250, 0.04);
-    border-bottom-left-radius: 8px;
-    border-bottom-right-radius: 8px;
-    margin-top: -4px; /* visually connect to the item above */
-    border: 1px solid rgba(96, 165, 250, 0.2);
-    border-top: none;
+  .progress-bar-container {
+    width: 100%;
+    display: flex;
+    align-items: center;
   }
 
   .progress-bar {
@@ -875,10 +1059,9 @@
     height: 6px;
     -webkit-appearance: none;
     appearance: none;
-    background: rgba(255, 255, 255, 0.1);
+    background: #e2e8f0;
     border-radius: 3px;
     outline: none;
-    cursor: pointer;
   }
 
   .progress-bar::-webkit-slider-thumb {
@@ -887,8 +1070,150 @@
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background: #60a5fa;
+    background: #3b82f6;
     cursor: pointer;
-    box-shadow: 0 0 5px rgba(96, 165, 250, 0.5);
+  }
+
+  .player-settings {
+    display: flex;
+    justify-content: flex-end;
+    flex: 1;
+    min-width: 120px;
+  }
+
+  .vol-control {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.9rem;
+    color: #64748b;
+  }
+
+  .mini-slider {
+    width: 80px;
+  }
+
+  /* --- Settings & Routing --- */
+  .settings-panel {
+    background: #fff;
+    border-radius: 16px;
+    padding: 30px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.02);
+  }
+
+  .form-group {
+    margin-bottom: 25px;
+  }
+
+  .form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: #334155;
+  }
+
+  select {
+    width: 100%;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    font-family: inherit;
+    font-size: 0.95rem;
+    outline: none;
+  }
+
+  .sliders {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    margin-top: 30px;
+  }
+
+  .slider-box label {
+    font-weight: 500;
+    margin-bottom: 5px;
+    display: block;
+  }
+
+  input[type="range"] {
+    width: 100%;
+  }
+
+  .error-banner {
+    background: #fee2e2;
+    color: #b91c1c;
+    padding: 15px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    border: 1px solid #fecaca;
+  }
+
+  /* --- Responsive Design --- */
+  @media (max-width: 900px) {
+    .main-content-wrapper {
+      flex-direction: column;
+    }
+
+    .sidebar {
+      width: 100%;
+      flex-direction: row;
+      flex-wrap: wrap;
+      padding: 15px;
+      gap: 15px;
+      align-items: center;
+      border-right: none;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+    }
+
+    .logo {
+      margin-bottom: 0;
+    }
+
+    .nav-menu {
+      flex-direction: row;
+      flex-wrap: wrap;
+    }
+
+    .nav-item {
+      width: auto;
+      padding: 8px 12px;
+    }
+
+    .bridge-status {
+      margin-bottom: 0;
+      margin-left: auto;
+    }
+
+    .toggle-btn {
+      width: auto;
+    }
+
+    .content-area {
+      padding: 20px;
+    }
+  }
+
+  @media (max-width: 600px) {
+    .bottom-player {
+      padding: 15px;
+      height: auto;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .player-info {
+      width: 100%;
+      text-align: center;
+      justify-content: center;
+    }
+
+    .player-controls {
+      width: 100%;
+    }
+
+    .player-settings {
+      display: none; /* Hide volume on tiny screens to save space */
+    }
   }
 </style>

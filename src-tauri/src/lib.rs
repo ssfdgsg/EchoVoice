@@ -132,6 +132,66 @@ fn update_shortcut(
     state.update_shortcut(&id, None);
 }
 
+#[tauri::command]
+fn update_global_stop_shortcut(
+    shortcut: Option<String>,
+    state: tauri::State<'_, state::SoundManager>,
+    app: tauri::AppHandle,
+) {
+    let config = state.get_app_config();
+    if let Some(old_sc) = config.global_stop_shortcut {
+        if let Ok(sc) = Shortcut::from_str(&old_sc) {
+            let _ = app.global_shortcut().unregister(sc);
+        }
+    }
+
+    if let Some(new_sc) = &shortcut {
+        // Normalize Svelte shortcut string (e.g. from "CommandOrControl+X" to "CommandOrControl+X")
+        let mut corrected = new_sc
+            .replace("Ctrl", "Control")
+            .replace("Command", "Super")
+            .replace("CommandOrControl", "SuperKey"); // Tauri might map CommandOrControl internally or just keep Super/Control
+
+        if corrected.contains("SuperKey") {
+            #[cfg(target_os = "macos")]
+            {
+                corrected = corrected.replace("SuperKey", "Super");
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                corrected = corrected.replace("SuperKey", "Control");
+            }
+        }
+
+        if let Ok(sc) = Shortcut::from_str(&corrected) {
+            let _ = app.global_shortcut().register(sc);
+            state.update_global_stop_shortcut(Some(corrected));
+            return;
+        }
+    }
+
+    state.update_global_stop_shortcut(None);
+}
+
+#[tauri::command]
+fn get_app_config(state: tauri::State<'_, state::SoundManager>) -> state::AppConfig {
+    state.get_app_config()
+}
+
+#[tauri::command]
+fn set_bg_image(path: Option<String>, state: tauri::State<'_, state::SoundManager>) {
+    state.set_bg_image(path)
+}
+
+#[tauri::command]
+fn set_default_devices(
+    input_id: Option<String>,
+    output_id: Option<String>,
+    state: tauri::State<'_, state::SoundManager>,
+) {
+    state.set_default_devices(input_id, output_id)
+}
+
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
@@ -145,6 +205,50 @@ pub fn run() {
 
     tauri::Builder::default()
         .setup(|app| {
+            let config_dir = app
+                .path()
+                .app_local_data_dir()
+                .unwrap_or_else(|_| std::env::current_dir().unwrap());
+            std::fs::create_dir_all(&config_dir).ok();
+            let config_path = config_dir.join("echovoice_config.json");
+
+            let sm = app.state::<state::SoundManager>();
+            sm.init_path_and_load(config_path);
+
+            // Helper to parse shortcuts
+            let parse_sc = |sc_str: &str| -> Option<Shortcut> {
+                let mut corrected = sc_str
+                    .replace("Ctrl", "Control")
+                    .replace("Command", "Super")
+                    .replace("CommandOrControl", "SuperKey");
+                if corrected.contains("SuperKey") {
+                    #[cfg(target_os = "macos")]
+                    {
+                        corrected = corrected.replace("SuperKey", "Super");
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        corrected = corrected.replace("SuperKey", "Control");
+                    }
+                }
+                Shortcut::from_str(&corrected).ok()
+            };
+
+            // register all shortcuts initially
+            let config = sm.get_app_config();
+            for sound in config.sounds {
+                if let Some(sc_str) = sound.shortcut {
+                    if let Some(sc) = parse_sc(&sc_str) {
+                        let _ = app.global_shortcut().register(sc);
+                    }
+                }
+            }
+            if let Some(stop_sc_str) = config.global_stop_shortcut {
+                if let Some(sc) = parse_sc(&stop_sc_str) {
+                    let _ = app.global_shortcut().register(sc);
+                }
+            }
+
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let toggle_i =
                 MenuItem::with_id(app, "toggle_bridge", "Toggle Bridge", true, None::<&str>)?;
@@ -193,7 +297,40 @@ pub fn run() {
                     if event.state() == ShortcutState::Pressed {
                         let sc_string = shortcut.to_string();
                         let state_sm = app.state::<state::SoundManager>();
+                        let config = state_sm.get_app_config();
 
+                        // 1. Check if it's the global stop shortcut
+                        if let Some(stop_sc_str) = config.global_stop_shortcut {
+                            // Helper to parse the saved shortcut string down to the `Shortcut` struct which `matches()` understands
+                            let parsed = {
+                                let mut corrected = stop_sc_str
+                                    .replace("Ctrl", "Control")
+                                    .replace("Command", "Super")
+                                    .replace("CommandOrControl", "SuperKey");
+                                if corrected.contains("SuperKey") {
+                                    #[cfg(target_os = "macos")]
+                                    {
+                                        corrected = corrected.replace("SuperKey", "Super");
+                                    }
+                                    #[cfg(not(target_os = "macos"))]
+                                    {
+                                        corrected = corrected.replace("SuperKey", "Control");
+                                    }
+                                }
+                                Shortcut::from_str(&corrected).ok()
+                            };
+
+                            if let Some(stop_sc) = parsed {
+                                if shortcut.id() == stop_sc.id() {
+                                    let state_ae = app.state::<audio::engine::AudioEngine>();
+                                    state_ae.stop_sound();
+                                    let _ = app.emit("global-stop", true);
+                                    return; // Stop processing further matches
+                                }
+                            }
+                        }
+
+                        // 2. Otherwise check sound shortcuts
                         if let Some(item) = state_sm.get_sound_by_shortcut(&sc_string) {
                             let app_clone = app.clone();
                             let path = item.path.clone();
@@ -223,6 +360,10 @@ pub fn run() {
             add_sound,
             remove_sound,
             update_shortcut,
+            get_app_config,
+            set_bg_image,
+            set_default_devices,
+            update_global_stop_shortcut,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

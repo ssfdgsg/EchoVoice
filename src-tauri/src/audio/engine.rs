@@ -2,7 +2,7 @@ use crate::audio::mixer::Mixer;
 use ringbuf::traits::Observer;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::HeapRb;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
     Arc, Mutex,
@@ -26,6 +26,7 @@ pub struct AudioEngine {
     mixer: Arc<Mixer>,
     sample_rate: Arc<AtomicU32>,
     sound_cache: Arc<Mutex<HashMap<String, Arc<Vec<f32>>>>>,
+    decoding_files: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Default for AudioEngine {
@@ -41,6 +42,7 @@ impl AudioEngine {
             mixer: Arc::new(Mixer::new()),
             sample_rate: Arc::new(AtomicU32::new(48000)),
             sound_cache: Arc::new(Mutex::new(HashMap::new())),
+            decoding_files: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -108,8 +110,17 @@ impl AudioEngine {
             // If it's already decoded, play it instantly
             mixer.play_sound(data, 1.0);
         } else {
-            // 2. Not cached: decode it now (synchronously blocking this IPC call)
-            match crate::audio::fx::SoundBank::load_from_file(&path, sr) {
+            // Check if another thread is already decoding this file
+            {
+                let mut decoding = self.decoding_files.lock().unwrap();
+                if decoding.contains(file_path) {
+                    return Ok(()); // Ignore spam requests
+                }
+                decoding.insert(path.clone());
+            }
+
+            // 2. Not cached: decode it now (synchronously blocking this thread)
+            let res = match crate::audio::fx::SoundBank::load_from_file(&path, sr) {
                 Ok(bank) => {
                     info!(
                         "Loaded sound: {} ({} samples, {} sr)",
@@ -123,12 +134,20 @@ impl AudioEngine {
                         cache_lock.insert(path.clone(), arc_data.clone());
                     }
                     mixer.play_sound(arc_data, 1.0);
+                    Ok(())
                 }
                 Err(e) => {
                     error!("Failed to load sound {}: {}", path, e);
-                    return Err(format!("Failed to load sound: {}", e));
+                    Err(format!("Failed to load sound: {}", e))
                 }
+            };
+
+            // Remove from decoding set
+            if let Ok(mut decoding) = self.decoding_files.lock() {
+                decoding.remove(file_path);
             }
+
+            return res;
         }
 
         Ok(())
