@@ -1,5 +1,5 @@
+use crate::audio::dsp::DspChain;
 use crate::audio::mixer::Mixer;
-use ringbuf::traits::Observer;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::HeapRb;
 use std::collections::{HashMap, HashSet};
@@ -9,7 +9,7 @@ use std::sync::{
 };
 use std::thread;
 use tracing::{error, info};
-use wasapi::{AudioCaptureClient, DeviceCollection, DeviceEnumerator, Direction, StreamMode};
+use wasapi::{AudioCaptureClient, DeviceEnumerator, Direction, StreamMode};
 
 struct SafeAudioCaptureClient(AudioCaptureClient);
 unsafe impl Send for SafeAudioCaptureClient {}
@@ -197,7 +197,7 @@ fn run_bridge_loop(
     mixer: Arc<Mixer>,
     sample_rate_state: Arc<AtomicU32>,
 ) -> Result<(), String> {
-    wasapi::initialize_mta().ok();
+    let _ = wasapi::initialize_mta().ok();
 
     info!("Locating input device: {}", input_device_id);
     let input_device = get_device_by_id(Direction::Capture, &input_device_id)?;
@@ -229,6 +229,12 @@ fn run_bridge_loop(
 
     let sr = out_format.get_samplespersec();
     sample_rate_state.store(sr, Ordering::Relaxed);
+
+    // Update DSP chain internal sample rate so that math (Filters, Delays) stays correct
+    if let Ok(mut chain) = mixer.dsp_chain.lock() {
+        let chain: &mut DspChain = &mut *chain;
+        chain.set_sample_rate(sr);
+    }
 
     info!("Input format: {:?}", in_format.to_waveformatex());
     info!("Output format: {:?}", out_format.to_waveformatex());
@@ -284,17 +290,20 @@ fn run_bridge_loop(
         let _ = wasapi::initialize_mta();
         while is_running_clone.load(Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(5));
-            if let Ok(Some(frames)) = in_capture.get_next_packet_size() {
-                if frames > 0 {
-                    let mut data = vec![0u8; frames as usize * in_bytes_per_frame];
-                    if let Ok((_read_frames, _buffer_info)) = in_capture.read_from_device(&mut data)
-                    {
-                        // Cast the raw bytes to f32 samples
-                        let f32_samples: &[f32] = bytemuck::cast_slice(&data);
-                        for &sample in f32_samples {
-                            let _ = prod.try_push(sample);
-                        }
+            // Drain all available packets in the hardware buffer
+            while let Ok(Some(frames)) = in_capture.get_next_packet_size() {
+                if frames == 0 {
+                    break;
+                }
+
+                let mut data = vec![0u8; frames as usize * in_bytes_per_frame];
+                if let Ok((_read_frames, _buffer_info)) = in_capture.read_from_device(&mut data) {
+                    let f32_samples: &[f32] = bytemuck::cast_slice(&data);
+                    for &sample in f32_samples {
+                        let _ = prod.try_push(sample);
                     }
+                } else {
+                    break; // Error reading, break inner loop
                 }
             }
         }
@@ -314,20 +323,22 @@ fn run_bridge_loop(
         if frames_available > 0 {
             let samples_needed = (frames_available as usize) * out_channels;
 
-            if cons.occupied_len() >= samples_needed {
-                let mut mic_chunk = vec![0f32; samples_needed];
-                for i in 0..samples_needed {
-                    if let Some(s) = cons.try_pop() {
-                        mic_chunk[i] = s;
-                    }
+            let mut mic_chunk = vec![0f32; samples_needed];
+
+            // Pop as much as we have, pad the rest with 0.0 (silence) if underrun
+            for i in 0..samples_needed {
+                if let Some(s) = cons.try_pop() {
+                    mic_chunk[i] = s;
+                } else {
+                    mic_chunk[i] = 0.0;
                 }
-
-                let mut out_chunk = vec![0f32; samples_needed];
-                mixer.process_frames(&mic_chunk, &mut out_chunk);
-
-                let byte_chunk: &[u8] = bytemuck::cast_slice(&out_chunk);
-                let _ = out_render.write_to_device(frames_available as usize, byte_chunk, None);
             }
+
+            let mut out_chunk = vec![0f32; samples_needed];
+            mixer.process_frames(&mic_chunk, &mut out_chunk);
+
+            let byte_chunk: &[u8] = bytemuck::cast_slice(&out_chunk);
+            let _ = out_render.write_to_device(frames_available as usize, byte_chunk, None);
         }
     }
 

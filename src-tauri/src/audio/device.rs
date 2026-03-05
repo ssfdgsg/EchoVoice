@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use wasapi::{DeviceCollection, DeviceEnumerator, Direction};
+use wasapi::{DeviceEnumerator, Direction};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AudioDeviceInfo {

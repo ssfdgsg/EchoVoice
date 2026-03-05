@@ -197,6 +197,100 @@ fn set_language(lang: Option<String>, state: tauri::State<'_, state::SoundManage
     state.set_language(lang)
 }
 
+#[tauri::command]
+fn set_noise_gate_threshold(
+    threshold: Option<f32>,
+    state: tauri::State<'_, state::SoundManager>,
+    engine: tauri::State<'_, audio::engine::AudioEngine>,
+) {
+    state.set_noise_gate_threshold(threshold);
+    if let Some(val) = threshold {
+        engine.get_mixer().set_noise_gate_threshold(val);
+    } else {
+        engine.get_mixer().set_noise_gate_threshold(0.0);
+    }
+}
+
+use crate::audio::dsp::{compressor::Compressor, eq::ThreeBandEq, pitch::PitchShifter};
+
+#[tauri::command]
+fn set_eq_enabled(enabled: bool, state: tauri::State<'_, audio::engine::AudioEngine>) {
+    if let Ok(mut chain) = state.get_mixer().dsp_chain.lock() {
+        if let Some(effect) = chain.get_effect_mut(0) {
+            effect.set_enabled(enabled);
+        }
+    }
+}
+
+#[tauri::command]
+fn set_eq_gains(
+    low: f32,
+    mid: f32,
+    high: f32,
+    state: tauri::State<'_, audio::engine::AudioEngine>,
+) {
+    if let Ok(mut chain) = state.get_mixer().dsp_chain.lock() {
+        if let Some(effect) = chain.get_effect_mut(0) {
+            if let Some(eq) = effect.as_any_mut().downcast_mut::<ThreeBandEq>() {
+                eq.set_low_gain(low);
+                eq.set_mid_gain(mid);
+                eq.set_high_gain(high);
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn set_compressor_enabled(enabled: bool, state: tauri::State<'_, audio::engine::AudioEngine>) {
+    if let Ok(mut chain) = state.get_mixer().dsp_chain.lock() {
+        if let Some(effect) = chain.get_effect_mut(1) {
+            effect.set_enabled(enabled);
+        }
+    }
+}
+
+#[tauri::command]
+fn set_compressor_params(
+    threshold: f32,
+    ratio: f32,
+    attack: f32,
+    release: f32,
+    gain: f32,
+    state: tauri::State<'_, audio::engine::AudioEngine>,
+) {
+    if let Ok(mut chain) = state.get_mixer().dsp_chain.lock() {
+        if let Some(effect) = chain.get_effect_mut(1) {
+            if let Some(comp) = effect.as_any_mut().downcast_mut::<Compressor>() {
+                comp.set_threshold(threshold);
+                comp.set_ratio(ratio);
+                comp.set_attack(attack);
+                comp.set_release(release);
+                comp.set_makeup_gain(gain);
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn set_pitch_enabled(enabled: bool, state: tauri::State<'_, audio::engine::AudioEngine>) {
+    if let Ok(mut chain) = state.get_mixer().dsp_chain.lock() {
+        if let Some(effect) = chain.get_effect_mut(2) {
+            effect.set_enabled(enabled);
+        }
+    }
+}
+
+#[tauri::command]
+fn set_pitch_ratio(ratio: f32, state: tauri::State<'_, audio::engine::AudioEngine>) {
+    if let Ok(mut chain) = state.get_mixer().dsp_chain.lock() {
+        if let Some(effect) = chain.get_effect_mut(2) {
+            if let Some(pitch) = effect.as_any_mut().downcast_mut::<PitchShifter>() {
+                pitch.set_pitch_ratio(ratio);
+            }
+        }
+    }
+}
+
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
@@ -370,6 +464,13 @@ pub fn run() {
             set_default_devices,
             update_global_stop_shortcut,
             set_language,
+            set_noise_gate_threshold,
+            set_eq_enabled,
+            set_eq_gains,
+            set_compressor_enabled,
+            set_compressor_params,
+            set_pitch_enabled,
+            set_pitch_ratio,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

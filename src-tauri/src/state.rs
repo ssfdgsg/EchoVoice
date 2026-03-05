@@ -19,6 +19,7 @@ pub struct AppConfig {
     pub default_output_id: Option<String>,
     pub global_stop_shortcut: Option<String>,
     pub language: Option<String>,
+    pub noise_gate_threshold: Option<f32>,
 }
 
 pub struct SoundManager {
@@ -129,6 +130,13 @@ impl SoundManager {
     pub fn set_language(&self, lang: Option<String>) {
         if let Ok(mut config) = self.config.lock() {
             config.language = lang;
+        }
+        self.save();
+    }
+
+    pub fn set_noise_gate_threshold(&self, threshold: Option<f32>) {
+        if let Ok(mut config) = self.config.lock() {
+            config.noise_gate_threshold = threshold;
         }
         self.save();
     }

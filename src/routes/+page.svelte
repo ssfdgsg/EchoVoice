@@ -1,8 +1,8 @@
 <script lang="ts">
+  import { onMount, onDestroy } from "svelte";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { onMount } from "svelte";
   import { dict } from "$lib/i18n";
 
   interface AudioDevice {
@@ -19,11 +19,11 @@
 
   interface AppConfig {
     sounds: SoundItem[];
-    bg_image_path: string | null;
     default_input_id: string | null;
     default_output_id: string | null;
     global_stop_shortcut: string | null;
     language: string | null;
+    noise_gate_threshold?: number;
   }
 
   // --- State ---
@@ -53,16 +53,31 @@
 
   let micVolume = $state(1.0);
   let fxVolume = $state(1.0);
+  let noiseGateThreshold = $state(0.0);
 
-  let bgImagePath = $state<string | null>(null);
   let globalStopShortcut = $state<string | null>(null);
+
+  // --- DSP Effect States ---
+  let isEqEnabled = $state(false);
+  let eqLow = $state(0.0);
+  let eqMid = $state(0.0);
+  let eqHigh = $state(0.0);
+
+  let isCompEnabled = $state(false);
+  let compThresh = $state(-20.0);
+  let compRatio = $state(4.0);
+  let compAttack = $state(10.0);
+  let compRelease = $state(100.0);
+  let compGain = $state(0.0);
+
+  let isPitchEnabled = $state(false);
+  let pitchRatio = $state(1.0);
 
   // --- App Config & Data ---
   async function loadConfig() {
     try {
       const config: AppConfig = await invoke("get_app_config");
       sounds = config.sounds || [];
-      bgImagePath = config.bg_image_path;
       globalStopShortcut = config.global_stop_shortcut;
       if (config.default_input_id && !selectedInput)
         selectedInput = config.default_input_id;
@@ -71,8 +86,14 @@
       if (config.language === "en" || config.language === "zh") {
         lang = config.language as "en" | "zh";
       }
-    } catch (err) {
-      console.error("Failed config load", err);
+      if (
+        config.noise_gate_threshold !== null &&
+        config.noise_gate_threshold !== undefined
+      ) {
+        noiseGateThreshold = config.noise_gate_threshold;
+      }
+    } catch (e) {
+      console.error("Failed to load config", e);
     }
   }
 
@@ -114,30 +135,6 @@
     }
   }
 
-  async function pickBackgroundImage() {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [
-          { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
-        ],
-      });
-      if (selected) {
-        bgImagePath = selected as string;
-        await invoke("set_bg_image", { path: bgImagePath });
-      }
-    } catch (err) {
-      console.error("Failed bg image", err);
-    }
-  }
-
-  async function clearBackgroundImage() {
-    try {
-      bgImagePath = null;
-      await invoke("set_bg_image", { path: null });
-    } catch (err) {}
-  }
-
   // --- Volumes ---
   async function updateMicVolume() {
     try {
@@ -157,6 +154,39 @@
     } catch (err) {
       console.error(err);
     }
+  }
+
+  // --- Noise Gate ---
+  async function updateNoiseGate() {
+    try {
+      await invoke("set_noise_gate_threshold", {
+        threshold: parseFloat(noiseGateThreshold.toString()),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  // --- DSP Sync ---
+  function updateEq() {
+    invoke("set_eq_enabled", { enabled: isEqEnabled });
+    invoke("set_eq_gains", { low: eqLow, mid: eqMid, high: eqHigh });
+  }
+
+  function updateCompressor() {
+    invoke("set_compressor_enabled", { enabled: isCompEnabled });
+    invoke("set_compressor_params", {
+      threshold: compThresh,
+      ratio: compRatio,
+      attack: compAttack,
+      release: compRelease,
+      gain: compGain,
+    });
+  }
+
+  function updatePitch() {
+    invoke("set_pitch_enabled", { enabled: isPitchEnabled });
+    invoke("set_pitch_ratio", { ratio: pitchRatio });
   }
 
   // --- Sounds ---
@@ -296,25 +326,35 @@
     }
   }
 
+  let unlistenToggleBridge: UnlistenFn | undefined;
+  let unlistenShortcutPlay: UnlistenFn | undefined;
+  let unlistenGlobalStop: UnlistenFn | undefined;
+
   onMount(async () => {
     await loadConfig();
     await loadDevices();
 
-    listen("toggle-bridge", () => {
+    unlistenToggleBridge = await listen("toggle-bridge", () => {
       if (isBridgeRunning) stopBridge();
       else startBridge();
     });
 
-    listen<string>("shortcut-play", (event) => {
+    unlistenShortcutPlay = await listen<string>("shortcut-play", (event) => {
       currentPlayingId = event.payload;
       progressRatio = 0;
       startProgressPolling();
     });
 
-    listen("global-stop", () => {
+    unlistenGlobalStop = await listen("global-stop", () => {
       currentPlayingId = null;
       stopProgressPolling();
     });
+  });
+
+  onDestroy(() => {
+    unlistenToggleBridge?.();
+    unlistenShortcutPlay?.();
+    unlistenGlobalStop?.();
   });
 
   // Derived filtered sounds
@@ -325,12 +365,7 @@
   );
 </script>
 
-<div
-  class="app-wrapper"
-  style="background-image: {bgImagePath
-    ? `url(${convertFileSrc(bgImagePath)})`
-    : 'none'}"
->
+<div class="app-wrapper">
   <div class="main-window">
     <div class="main-content-wrapper">
       <!-- Sidebar -->
@@ -408,7 +443,7 @@
             </div>
           </header>
 
-          <div class="sound-grid">
+          <div class="sounds-grid">
             {#each filteredSounds as sound}
               <div
                 class={`sound-card ${currentPlayingId === sound.id ? "playing" : ""}`}
@@ -537,6 +572,213 @@
                 />
               </div>
             </div>
+
+            <div class="form-group" style="margin-top: 25px;">
+              <label>{t.st_gate_label}</label>
+              <p class="subtitle" style="margin-bottom: 10px;">
+                {t.st_gate_desc}
+              </p>
+              <div class="slider-box" style="margin-top: 10px;">
+                <label>
+                  {#if noiseGateThreshold === 0}
+                    {t.st_gate_off}
+                  {:else}
+                    {Math.round(noiseGateThreshold * 1000)}%
+                  {/if}
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="0.1"
+                  step="0.001"
+                  bind:value={noiseGateThreshold}
+                  oninput={updateNoiseGate}
+                />
+              </div>
+            </div>
+
+            <!-- DSP Audio Effects Area -->
+            <hr
+              style="border: 0; border-top: 1px solid #f1f5f9; margin: 30px 0;"
+            />
+            <h2 style="margin-top: 0; font-size: 1.25rem;">Advanced Filters</h2>
+
+            <!-- 1. Equalizer -->
+            <div class="dsp-block">
+              <label class="dsp-toggle">
+                <input
+                  type="checkbox"
+                  bind:checked={isEqEnabled}
+                  onchange={updateEq}
+                />
+                <strong>{t.fx_eq_enable}</strong>
+              </label>
+              {#if isEqEnabled}
+                <div class="sliders dsp-sliders">
+                  <div class="slider-box">
+                    <label for="eqLow"
+                      >{t.fx_eq_low} ({eqLow > 0 ? "+" : ""}{eqLow} dB)</label
+                    >
+                    <input
+                      id="eqLow"
+                      type="range"
+                      min="-12"
+                      max="12"
+                      step="0.5"
+                      bind:value={eqLow}
+                      oninput={updateEq}
+                    />
+                  </div>
+                  <div class="slider-box">
+                    <label for="eqMid"
+                      >{t.fx_eq_mid} ({eqMid > 0 ? "+" : ""}{eqMid} dB)</label
+                    >
+                    <input
+                      id="eqMid"
+                      type="range"
+                      min="-12"
+                      max="12"
+                      step="0.5"
+                      bind:value={eqMid}
+                      oninput={updateEq}
+                    />
+                  </div>
+                  <div class="slider-box">
+                    <label for="eqHigh"
+                      >{t.fx_eq_high} ({eqHigh > 0 ? "+" : ""}{eqHigh} dB)</label
+                    >
+                    <input
+                      id="eqHigh"
+                      type="range"
+                      min="-12"
+                      max="12"
+                      step="0.5"
+                      bind:value={eqHigh}
+                      oninput={updateEq}
+                    />
+                  </div>
+                </div>
+              {/if}
+            </div>
+
+            <!-- 2. Compressor -->
+            <div class="dsp-block">
+              <label class="dsp-toggle">
+                <input
+                  type="checkbox"
+                  bind:checked={isCompEnabled}
+                  onchange={updateCompressor}
+                />
+                <strong>{t.fx_comp_enable}</strong>
+              </label>
+              {#if isCompEnabled}
+                <div
+                  class="sliders dsp-sliders"
+                  style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;"
+                >
+                  <div class="slider-box">
+                    <label for="compThresh"
+                      >{t.fx_comp_thresh} ({compThresh} dB)</label
+                    >
+                    <input
+                      id="compThresh"
+                      type="range"
+                      min="-60"
+                      max="0"
+                      step="1"
+                      bind:value={compThresh}
+                      oninput={updateCompressor}
+                    />
+                  </div>
+                  <div class="slider-box">
+                    <label for="compRatio"
+                      >{t.fx_comp_ratio} ({compRatio}:1)</label
+                    >
+                    <input
+                      id="compRatio"
+                      type="range"
+                      min="1"
+                      max="20"
+                      step="0.5"
+                      bind:value={compRatio}
+                      oninput={updateCompressor}
+                    />
+                  </div>
+                  <div class="slider-box">
+                    <label for="compAttack"
+                      >{t.fx_comp_attack} ({compAttack} ms)</label
+                    >
+                    <input
+                      id="compAttack"
+                      type="range"
+                      min="1"
+                      max="200"
+                      step="1"
+                      bind:value={compAttack}
+                      oninput={updateCompressor}
+                    />
+                  </div>
+                  <div class="slider-box">
+                    <label for="compRelease"
+                      >{t.fx_comp_release} ({compRelease} ms)</label
+                    >
+                    <input
+                      id="compRelease"
+                      type="range"
+                      min="10"
+                      max="1000"
+                      step="10"
+                      bind:value={compRelease}
+                      oninput={updateCompressor}
+                    />
+                  </div>
+                  <div class="slider-box" style="grid-column: span 2;">
+                    <label for="compGain"
+                      >{t.fx_comp_makeup} ({compGain} dB)</label
+                    >
+                    <input
+                      id="compGain"
+                      type="range"
+                      min="0"
+                      max="24"
+                      step="0.5"
+                      bind:value={compGain}
+                      oninput={updateCompressor}
+                    />
+                  </div>
+                </div>
+              {/if}
+            </div>
+
+            <!-- 3. Pitch Shifter -->
+            <div class="dsp-block">
+              <label class="dsp-toggle">
+                <input
+                  type="checkbox"
+                  bind:checked={isPitchEnabled}
+                  onchange={updatePitch}
+                />
+                <strong>{t.fx_pitch_enable}</strong>
+              </label>
+              {#if isPitchEnabled}
+                <div class="sliders dsp-sliders">
+                  <div class="slider-box">
+                    <label for="pitchRatio"
+                      >{t.fx_pitch_ratio} (x{pitchRatio})</label
+                    >
+                    <input
+                      id="pitchRatio"
+                      type="range"
+                      min="0.5"
+                      max="2.0"
+                      step="0.05"
+                      bind:value={pitchRatio}
+                      oninput={updatePitch}
+                    />
+                  </div>
+                </div>
+              {/if}
+            </div>
           </div>
         {/if}
 
@@ -624,30 +866,6 @@
                 readonly
               />
             </div>
-
-            <hr
-              style="border: 0; border-top: 1px solid #f1f5f9; margin: 30px 0;"
-            />
-
-            <div class="form-group">
-              <label>{t.st_bg_label}</label>
-              <div style="display: flex; gap: 10px; margin-top: 5px;">
-                <button class="btn-primary" onclick={pickBackgroundImage}
-                  >{t.st_bg_pick}</button
-                >
-                {#if bgImagePath}
-                  <button class="menu-btn" onclick={clearBackgroundImage}
-                    >{t.st_bg_clear}</button
-                  >
-                {/if}
-              </div>
-              {#if bgImagePath}
-                <p class="subtitle" style="margin-top: 10px;">
-                  {t.st_bg_current}
-                  {bgImagePath}
-                </p>
-              {/if}
-            </div>
           </div>
         {/if}
 
@@ -705,6 +923,27 @@
               <div class="success-box">
                 🎉 {t.gd_step3_success}
               </div>
+            </div>
+
+            <hr
+              style="border: 0; border-top: 1px solid #e2e8f0; margin: 40px 0;"
+            />
+
+            <h2>{t.gd_dsp_title}</h2>
+
+            <div class="guide-card">
+              <h3>{t.gd_dsp_eq_title}</h3>
+              <p>{t.gd_dsp_eq_desc}</p>
+            </div>
+
+            <div class="guide-card">
+              <h3>{t.gd_dsp_comp_title}</h3>
+              <p>{t.gd_dsp_comp_desc}</p>
+            </div>
+
+            <div class="guide-card">
+              <h3>{t.gd_dsp_pitch_title}</h3>
+              <p>{t.gd_dsp_pitch_desc}</p>
             </div>
           </div>
         {/if}
@@ -802,17 +1041,14 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 2vw;
     box-sizing: border-box;
   }
 
   .main-window {
     width: 100%;
-    max-width: 1200px;
     height: 100%;
     background: rgba(255, 255, 255, 0.85);
     backdrop-filter: blur(20px);
-    border-radius: 16px;
     box-shadow:
       0 20px 40px rgba(0, 0, 0, 0.1),
       0 1px 3px rgba(0, 0, 0, 0.05);
@@ -996,10 +1232,11 @@
   }
 
   /* --- Sound Grid --- */
-  .sound-grid {
+  .sounds-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
     gap: 20px;
+    padding-bottom: 20px;
   }
 
   .sound-card {
@@ -1437,6 +1674,29 @@
     color: #166534;
     position: relative;
     z-index: 1;
+  }
+
+  /* --- DSP Blocks --- */
+  .dsp-block {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 15px;
+  }
+  .dsp-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    font-size: 1.05rem;
+    color: #1e293b;
+    margin-bottom: 0;
+  }
+  .dsp-sliders {
+    margin-top: 20px !important;
+    padding-top: 20px;
+    border-top: 1px dashed #cbd5e1;
   }
 
   .inline-btn {

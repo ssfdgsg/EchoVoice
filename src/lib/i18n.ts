@@ -33,13 +33,26 @@ export const dict = {
     st_title: "Settings",
     st_lang_label: "Language / 语言",
     st_lang_desc: "Choose the display language for the application UI.",
+    st_gate_label: "Noise Gate Threshold",
+    st_gate_desc: "Automatically mutes background noise (like fans or static) when you are not speaking. 0% means Off.",
+    st_gate_off: "Off",
     st_global_controls: "Global Controls",
     st_global_desc: "Instantly stop all audio playing via Soundboard.",
     st_global_placeholder: "Click to bind Global Stop Hotkey",
-    st_bg_label: "Custom Background Image",
-    st_bg_pick: "Pick Image",
-    st_bg_clear: "Clear",
-    st_bg_current: "Current:",
+
+    // DSP Routing & Effects
+    fx_eq_enable: "Enable 3-Band Equalizer",
+    fx_eq_low: "Bass (Low)",
+    fx_eq_mid: "Midrange",
+    fx_eq_high: "Treble (High)",
+    fx_comp_enable: "Enable Compressor (Auto-Leveling)",
+    fx_comp_thresh: "Threshold",
+    fx_comp_ratio: "Ratio",
+    fx_comp_attack: "Attack",
+    fx_comp_release: "Release",
+    fx_comp_makeup: "Makeup Gain",
+    fx_pitch_enable: "Enable Voice Changer",
+    fx_pitch_ratio: "Pitch (0.5 = Low, 2.0 = High)",
 
     // Guide View
     gd_title: "Setup Guide & Routing",
@@ -58,6 +71,14 @@ export const dict = {
     gd_step3_l1: "Go to their Voice & Audio Settings.",
     gd_step3_l2: "Set your Input Device (Microphone) to CABLE Output (VB-Audio Virtual Cable).",
     gd_step3_success: "You're Done! When you press the Start Bridge button in EchoVoice, your real voice and the soundboard effects will both be mixed and sent to your teammates!",
+
+    gd_dsp_title: "Advanced Filters Guide",
+    gd_dsp_eq_title: "3-Band Equalizer (EQ)",
+    gd_dsp_eq_desc: "Adjusts the volume of specific frequency ranges. 'Bass' affects low, deep sounds; 'Midrange' affects most vocal presence; 'Treble' affects high, crisp sounds.",
+    gd_dsp_comp_title: "Compressor / Auto-Leveler",
+    gd_dsp_comp_desc: "Evens out the volume of your microphone automatically. When you get too loud (above the 'Threshold'), it reduces the volume by the 'Ratio'. 'Attack' is how fast it reacts, 'Release' is how fast it recovers. 'Makeup Gain' boosts the final quieted signal to match normal volumes.",
+    gd_dsp_pitch_title: "Voice Changer (Pitch Shifter)",
+    gd_dsp_pitch_desc: "Alters the pitch of your voice without changing the speed. Values below 1.0 make your voice deeper, values above 1.0 make it higher.",
 
     // Bottom Player
     pl_playing: "Active",
@@ -98,13 +119,26 @@ export const dict = {
     st_title: "系统设置",
     st_lang_label: "语言 / Language",
     st_lang_desc: "修改软件界面的显示语言。",
+    st_gate_label: "麦克风降噪闸门 (Noise Gate)",
+    st_gate_desc: "当你不说话时，自动过滤风扇声和底噪杂音。0% 代表关闭降噪。",
+    st_gate_off: "关闭",
     st_global_controls: "全局控制快捷键",
     st_global_desc: "一键瞬间停止所有正在播放的音效。",
     st_global_placeholder: "点击绑定“全局停止”快捷键",
-    st_bg_label: "自定义背景图片",
-    st_bg_pick: "选择图片",
-    st_bg_clear: "清除",
-    st_bg_current: "当前壁纸:",
+
+    // DSP Routing & Effects
+    fx_eq_enable: "启用三段均衡器 (EQ)",
+    fx_eq_low: "低音 (Bass)",
+    fx_eq_mid: "中音 (Mid)",
+    fx_eq_high: "高音 (Treble)",
+    fx_comp_enable: "启用音频压缩器 (防爆音)",
+    fx_comp_thresh: "压缩阈值 (Threshold)",
+    fx_comp_ratio: "压缩比 (Ratio)",
+    fx_comp_attack: "启动时间 (Attack)",
+    fx_comp_release: "释放时间 (Release)",
+    fx_comp_makeup: "补偿增益 (Makeup Gain)",
+    fx_pitch_enable: "启用变声器 (Pitch Shift)",
+    fx_pitch_ratio: "音调 (0.5=男中音, 2.0=女高音)",
 
     // Guide View
     gd_title: "安装教程与声音路由",
@@ -124,6 +158,14 @@ export const dict = {
     gd_step3_l1: "进入它们的 语音/音频设置 界面。",
     gd_step3_l2: "将它们的 麦克风 (输入设备) 修改为 CABLE Output (VB-Audio Virtual Cable)。",
     gd_step3_success: "大功告成！现在只要你在 EchoVoice 中点击左侧的【启动音频桥接】，你说话的声音和你播放的猴叫声，就会一起完美地传给你的队友了！",
+
+    gd_dsp_title: "高级音频效果指南 (DSP)",
+    gd_dsp_eq_title: "三段均衡器 (EQ)",
+    gd_dsp_eq_desc: "用于调整不同频率范围的音量。'低音(Bass)'可以增加声音的低沉感，'中音(Mid)'影响主要的人声表现，'高音(Treble)'则控制声音的清脆度和齿音。",
+    gd_dsp_comp_title: "音频压缩器 (防爆音/自动电平)",
+    gd_dsp_comp_desc: "自动平衡麦克风的音量。当您突然大声说话（超过'Threshold 阈值'）时，它会按照'Ratio 压缩比'自动降低音量。'Attack 启动时间'和'Release 释放时间'控制它的反应速度。'Makeup Gain 补偿增益'用于在压缩后整体提升音量，让平时的轻声细语也能听得清。",
+    gd_dsp_pitch_title: "变声器 (Pitch Shifter)",
+    gd_dsp_pitch_desc: "在不改变语速的情况下改变您声音的音调。低于 1.0 的值会让声音变得低沉（男低音），高于 1.0 的值会让声音变得尖锐（女高音）。",
 
     // Bottom Player
     pl_playing: "正在播放",

@@ -1,0 +1,60 @@
+﻿cargo :     Checking echovoice v0.
+1.0 (D:\code\rust\EchoVoice\src-ta
+uri)
+所在位置 行:1 字符: 1
++ cargo check --color never 2>&1 >
+ error_check.log ; cat error_check
+.lo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~
+    + CategoryInfo          : Not 
+   Specified: (    Checking ec..  
+  .oice\src-tauri):String) [],    
+ RemoteException
+    + FullyQualifiedErrorId : Nat 
+   iveCommandError
+ 
+error[E0433]: failed to resolve: c
+ould not find `dsp` in `audio`
+ --> src\audio\mixer.rs:1:19
+  |
+1 | use crate::audio::dsp::{compre
+ssor::Compressor, eq::ThreeBandEq,
+ pitch::PitchShifter, DspChain};
+  |                   ^^^ could no
+t find `dsp` in `audio`
+
+error[E0432]: unresolved import `c
+rate::audio::dsp`
+ --> src\audio\mixer.rs:1:19
+  |
+1 | use crate::audio::dsp::{compre
+ssor::Compressor, eq::ThreeBandEq,
+ pitch::PitchShifter, DspChain};
+  |                   ^^^ could no
+t find `dsp` in `audio`
+
+error[E0282]: type annotations nee
+ded
+   --> src\audio\engine.rs:234:9
+    |
+234 |         chain.set_sample_rat
+e(sr);
+    |         ^^^^^ cannot infer t
+ype
+
+error[E0282]: type annotations nee
+ded
+   --> src\audio\mixer.rs:170:13
+    |
+170 |             chain.process(ou
+tput);
+    |             ^^^^^ cannot inf
+er type
+
+Some errors have detailed explanat
+ions: E0282, E0432, E0433.
+For more information about an erro
+r, try `rustc --explain E0282`.
+error: could not compile `echovoic
+e` (lib) due to 4 previous errors

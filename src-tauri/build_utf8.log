@@ -1,0 +1,83 @@
+﻿cargo :     Checking echovoice v0.
+1.0 (D:\code\rust\EchoVoice\src-ta
+uri)
+所在位置 行:1 字符: 1
++ cargo check > build.log 2>&1 ; c
+at build.log
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : Not 
+   Specified: (    Checking ec..  
+  .oice\src-tauri):String) [],    
+ RemoteException
+    + FullyQualifiedErrorId : Nat 
+   iveCommandError
+ 
+error[E0425]: cannot find type `Ds
+pChain` in this scope
+   --> src\audio\engine.rs:234:25
+    |
+234 |         let chain: &mut DspC
+hain = &mut *chain;
+    |                         ^^^^
+^^^^ not found in this scope
+    |
+help: consider importing this stru
+ct
+    |
+  1 + use crate::audio::dsp::DspCh
+ain;
+    |
+
+warning: unused variable: `out_l1`
+  --> src\audio\dsp\pitch.rs:87:17
+   |
+87 |             let out_l1 = 0.0;
+ // Placeholder for interpolation
+   |                 ^^^^^^ help: 
+if this is intentional, prefix it 
+with an underscore: `_out_l1`
+   |
+   = note: `#[warn(unused_variable
+s)]` (part of `#[warn(unused)]`) o
+n by default
+
+warning: unused variable: `out_r1`
+  --> src\audio\dsp\pitch.rs:88:17
+   |
+88 |             let out_r1 = 0.0;
+   |                 ^^^^^^ help: 
+if this is intentional, prefix it 
+with an underscore: `_out_r1`
+
+warning: unused variable: `out_l2`
+  --> src\audio\dsp\pitch.rs:89:17
+   |
+89 |             let out_l2 = 0.0;
+   |                 ^^^^^^ help: 
+if this is intentional, prefix it 
+with an underscore: `_out_l2`
+
+warning: unused variable: `out_r2`
+  --> src\audio\dsp\pitch.rs:90:17
+   |
+90 |             let out_r2 = 0.0;
+   |                 ^^^^^^ help: 
+if this is intentional, prefix it 
+with an underscore: `_out_r2`
+
+warning: unused variable: `limit`
+  --> src\audio\dsp\pitch.rs:96:17
+   |
+96 |             let limit = buffe
+r_cap - 2;
+   |                 ^^^^^ help: i
+f this is intentional, prefix it w
+ith an underscore: `_limit`
+
+For more information about this er
+ror, try `rustc --explain E0425`.
+warning: `echovoice` (lib) generat
+ed 5 warnings
+error: could not compile `echovoic
+e` (lib) due to 1 previous error; 
+5 warnings emitted
