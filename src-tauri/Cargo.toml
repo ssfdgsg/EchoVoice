@@ -17,13 +17,18 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# The audio core is a separate workspace member so `cargo test -p echovoice-core` can run the
+# mixer / DSP / config unit tests on any machine, even one without the Windows SDK.
+[workspace]
+members = ["crates/echovoice-core"]
+resolver = "2"
+
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wasapi = "0.22"
-symphonia = { version = "0.5", features = ["all"] }
 rubato = "0.14"
 ringbuf = "0.4"
 tracing = "0.1"
@@ -33,6 +38,18 @@ crossbeam-channel = "0.5.15"
 bytemuck = "1.25.0"
 tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-dialog = "2.6.0"
+echovoice-core = { path = "crates/echovoice-core" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 # Optimize dependencies even in debug builds to radically speed up audio decoding/resampling
 [profile.dev.package."*"]

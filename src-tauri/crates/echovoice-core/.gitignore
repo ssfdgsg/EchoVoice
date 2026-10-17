@@ -1,0 +1,3 @@
+# Cargo build artefacts. The workspace normally shares src-tauri/target, but running
+# `cargo` from inside this member directory can create a local one.
+/target/

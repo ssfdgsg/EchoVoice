@@ -785,11 +785,11 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "crossbeam-channel",
+ "echovoice-core",
  "ringbuf",
  "rubato",
  "serde",
  "serde_json",
- "symphonia",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -799,6 +799,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wasapi",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "echovoice-core"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "rubato",
+ "serde",
+ "serde_json",
+ "symphonia",
+ "tracing",
 ]
 
 [[package]]
